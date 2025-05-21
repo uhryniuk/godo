@@ -1,6 +1,5 @@
 BINARY_NAME=godo
 CMD_DIR=.
-# CMD_DIR=cmd/$(BINARY_NAME)
 
 .PHONY: build run test clean
 

@@ -1,9 +1,12 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"os"
-  "path/filepath"
+	"path/filepath"
+
+	"github.com/uhryniuk/godo/internal/utils"
 )
 
 const (
@@ -19,10 +22,24 @@ type CliConfig struct {}
 // exists on the user's system, then use those values to configure the CLI.
 func InitConfig() *CliConfig {
   
-  // TODO
-  // 1. Assert config directories exist.
-  // 2. Assert files exist.
-  // 3. Read file contents and UnMarshall to CliConfig
+  // Ensure all config paths exist
+  dirs := []string{GetConfigPath(), GetJobDir()}
+  for _, dir := range dirs {
+    if !utils.FileExists(dir) {
+      os.Mkdir(dir, 0644)
+    }
+  }
+
+  // Read the config file if exists, otherwise creating it
+  file, err := os.OpenFile(GetConfigFile(), os.O_RDWR|os.O_CREATE, 0644)
+  if err != nil {
+    log.Fatal(err)
+  } else {
+    fmt.Println("successfully read config")
+  }
+  defer file.Close()
+
+  // TODO UnMarshall into the config.
 
   return &CliConfig {}
 }

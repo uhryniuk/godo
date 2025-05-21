@@ -7,6 +7,7 @@ import (
 	"os/exec"
 
 	"github.com/spf13/cobra"
+	// "github.com/uhryniuk/godo/internal/config"
 	// "log/slog"
 )	
 
@@ -17,8 +18,9 @@ var rootCmd = &cobra.Command{
     creating and managing jobs from the command-line.`,
   Run: func(cmd *cobra.Command, args []string) {
     // Do Stuff Here
+    // cli := config.InitConfig()
     fmt.Println("This is the root command")
-    fmt.Println(args)
+    fmt.Println("Args", args)
     fmt.Println(cmd.Flags().GetBool("stdout"))
     fmt.Println(cmd.Flags().GetBool("stderr"))
 
@@ -44,7 +46,8 @@ var rootCmd = &cobra.Command{
 
     fmt.Println(len(args))
     command := exec.Command(baseCommand, arguments...)
-    command.Env = os.Environ()  // Set the env as the parents.
+    // FIXME Dirty combine the environments
+    command.Env = append(command.Env, os.Environ()...)
 
     // Create a file, then just pass that to the Stdout reference.
     f, err := os.OpenFile("some-file", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
@@ -55,8 +58,10 @@ var rootCmd = &cobra.Command{
 
     // Create the buffers to capture all of the logs.
     var stdout, stderr bytes.Buffer
-    command.Stdout = &stdout
+    command.Stdout = f
     command.Stderr = &stderr
+
+    fmt.Println(command.Env)
     
     exitCode := 0
     if err := command.Run(); err != nil {
@@ -71,12 +76,21 @@ var rootCmd = &cobra.Command{
     fmt.Println("-------------")
     fmt.Println(stderr.String())
     fmt.Println(exitCode)
+    // cmd := exec.Command("sleep", "60")
+    // cmd.Stdout = nil
+    // cmd.Stderr = nil
+    // cmd.Stdin = nil
+    // cmd.SysProcAttr = &syscall.SysProcAttr{
+    //     Setsid: true,
+    // }
+    // cmd.Start()
   },
 }
 
 func Execute() {
   rootCmd.Flags().Bool("stdout", true, "Redirect stdout from child processes to this process")
   rootCmd.Flags().Bool("stderr", true, "Redirect stderr from child processes to this process")
+  rootCmd.AddCommand(supervisorCmd, listCmd)
   if err := rootCmd.Execute(); err != nil {
     fmt.Println(err)
     os.Exit(1)
