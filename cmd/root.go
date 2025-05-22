@@ -72,10 +72,6 @@ var rootCmd = &cobra.Command{
         panic(err)
       }
     }
-    fmt.Println(stdout.String())
-    fmt.Println("-------------")
-    fmt.Println(stderr.String())
-    fmt.Println(exitCode)
     // cmd := exec.Command("sleep", "60")
     // cmd.Stdout = nil
     // cmd.Stderr = nil
