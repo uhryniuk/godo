@@ -58,7 +58,7 @@ var rootCmd = &cobra.Command{
 
     // Create the buffers to capture all of the logs.
     var stdout, stderr bytes.Buffer
-    command.Stdout = f
+    command.Stdout = &stdout
     command.Stderr = &stderr
 
     fmt.Println(command.Env)
@@ -72,6 +72,7 @@ var rootCmd = &cobra.Command{
         panic(err)
       }
     }
+    fmt.Println(exitCode)
     // cmd := exec.Command("sleep", "60")
     // cmd.Stdout = nil
     // cmd.Stderr = nil
