@@ -47,18 +47,52 @@ func (c *Client) Call(ctx context.Context, req Request) (*Response, error) {
 // Ping returns the daemon's PingResponse, or an error if the daemon is
 // unreachable or returns a non-OK reply.
 func (c *Client) Ping(ctx context.Context) (*PingResponse, error) {
-	resp, err := c.Call(ctx, Request{Op: OpPing})
+	var out PingResponse
+	if err := c.callTyped(ctx, Request{Op: OpPing}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Run launches a job. Returns the registered Job (with PID populated).
+func (c *Client) Run(ctx context.Context, req RunRequest) (*RunResponse, error) {
+	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
+	var out RunResponse
+	if err := c.callTyped(ctx, Request{Op: OpRun, Body: body}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// List returns a snapshot of every registered job.
+func (c *Client) List(ctx context.Context) (*ListResponse, error) {
+	var out ListResponse
+	if err := c.callTyped(ctx, Request{Op: OpList}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// callTyped is a helper that performs Call, checks OK, and unmarshals
+// resp.Body into out.
+func (c *Client) callTyped(ctx context.Context, req Request, out any) error {
+	resp, err := c.Call(ctx, req)
+	if err != nil {
+		return err
+	}
 	if !resp.OK {
-		return nil, fmt.Errorf("daemon error: %s", resp.Error)
+		return fmt.Errorf("daemon: %s", resp.Error)
 	}
-	var ping PingResponse
-	if err := json.Unmarshal(resp.Body, &ping); err != nil {
-		return nil, fmt.Errorf("decode ping body: %w", err)
+	if out == nil || len(resp.Body) == 0 {
+		return nil
 	}
-	return &ping, nil
+	if err := json.Unmarshal(resp.Body, out); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+	return nil
 }
 
 // Reachable returns true if the daemon answers a Ping within timeout.
