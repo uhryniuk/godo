@@ -26,6 +26,7 @@ go.work.sum
 
 # local development
 .local
+.claude/
 godo
 godo.jsonl
 TODO.md
