@@ -1,95 +1,60 @@
 package cmd
 
 import (
-	"bytes"
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
+	"time"
 
 	"github.com/spf13/cobra"
-	// "github.com/uhryniuk/godo/internal/config"
-	// "log/slog"
+
+	"github.com/uhryniuk/godo/internal/autospawn"
+	"github.com/uhryniuk/godo/internal/config"
+	"github.com/uhryniuk/godo/internal/proto"
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "godo",
-	Short: "Godo is a better way to manage jobs from the command-line",
-	Long: `An alternative to 'job' that improves the ergnomics of 
-    creating and managing jobs from the command-line.`,
+	Use:   "godo [flags] <command> [args...]",
+	Short: "Run and manage long-lived background processes",
+	Long: `godo runs commands as supervised background processes that survive shell
+logout. Equivalent to 'godo run' — passes its positional args to the daemon
+which spawns and tracks the process.`,
+	DisableFlagParsing: true, // pass everything after 'godo' through to the child
+	Args:               cobra.MinimumNArgs(0),
 	Run: func(cmd *cobra.Command, args []string) {
-		// Do Stuff Here
-		// cli := config.InitConfig()
-		fmt.Println("This is the root command")
-		fmt.Println("Args", args)
-		fmt.Println(cmd.Flags().GetBool("stdout"))
-		fmt.Println(cmd.Flags().GetBool("stderr"))
-
-		// TODO run strings.Fields(arg) for each arg in args
-		// This will split them on their white space
-		// Otherwise the command, "la -la", will register as a base command.
-
-		for _, v := range args {
-			fmt.Println(v)
+		if len(args) == 0 {
+			_ = cmd.Help()
+			return
 		}
 
-		if len(args) == 0 {
-			fmt.Println("No command provided")
+		config.InitConfig()
+		sock := config.GetSocketPath()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := autospawn.EnsureRunning(ctx, sock, autospawn.SpawnSupervisor); err != nil {
+			fmt.Fprintln(os.Stderr, "godo:", err)
 			os.Exit(1)
 		}
 
-		baseCommand := args[0]
-		arguments := []string{}
-
-		if len(args) > 1 {
-			arguments = args[1:]
+		req := proto.RunRequest{
+			Command: args[0],
+			Args:    args[1:],
 		}
-
-		fmt.Println(len(args))
-		command := exec.Command(baseCommand, arguments...)
-		// FIXME Dirty combine the environments
-		command.Env = append(command.Env, os.Environ()...)
-
-		// Create a file, then just pass that to the Stdout reference.
-		f, err := os.OpenFile("some-file", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		resp, err := proto.NewClient(sock).Run(ctx, req)
 		if err != nil {
-			panic(err)
+			fmt.Fprintln(os.Stderr, "godo:", err)
+			os.Exit(1)
 		}
-		defer f.Close()
-
-		// Create the buffers to capture all of the logs.
-		var stdout, stderr bytes.Buffer
-		command.Stdout = &stdout
-		command.Stderr = &stderr
-
-		fmt.Println(command.Env)
-
-		exitCode := 0
-		if err := command.Run(); err != nil {
-			if exitError, ok := err.(*exec.ExitError); ok {
-				exitCode = exitError.ExitCode()
-			} else {
-				fmt.Println("boof failed to run the command")
-				panic(err)
-			}
-		}
-		fmt.Println(exitCode)
-		// cmd := exec.Command("sleep", "60")
-		// cmd.Stdout = nil
-		// cmd.Stderr = nil
-		// cmd.Stdin = nil
-		// cmd.SysProcAttr = &syscall.SysProcAttr{
-		//     Setsid: true,
-		// }
-		// cmd.Start()
+		fmt.Printf("%s  pid=%d  %s\n", resp.Job.ShortID(), resp.Job.PID, resp.Job.Name)
 	},
 }
 
 func Execute() {
-	rootCmd.Flags().Bool("stdout", true, "Redirect stdout from child processes to this process")
-	rootCmd.Flags().Bool("stderr", true, "Redirect stderr from child processes to this process")
 	rootCmd.AddCommand(supervisorCmd, listCmd, daemonCmd)
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }

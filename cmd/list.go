@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -14,8 +15,9 @@ import (
 )
 
 var listCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List all jobs",
+	Use:     "list",
+	Aliases: []string{"ps"},
+	Short:   "List all jobs",
 	Run: func(cmd *cobra.Command, args []string) {
 		config.InitConfig()
 		sock := config.GetSocketPath()
@@ -28,13 +30,46 @@ var listCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Real List RPC lands in Step 3. For now confirm the daemon is up
-		// and print its identity so we can verify auto-spawn end-to-end.
-		ping, err := proto.NewClient(sock).Ping(ctx)
+		resp, err := proto.NewClient(sock).List(ctx)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "godo:", err)
 			os.Exit(1)
 		}
-		fmt.Printf("daemon ok  pid=%d  version=%s\n", ping.PID, ping.Version)
+
+		if len(resp.Jobs) == 0 {
+			fmt.Println("(no jobs)")
+			return
+		}
+
+		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "ID\tNAME\tSTATE\tPID\tUPTIME\tEXIT")
+		now := time.Now()
+		for _, j := range resp.Jobs {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\n",
+				j.ShortID(), j.Name, j.State, j.PID,
+				uptime(j.StartedAt, j.ExitedAt, now),
+				exitStr(j.State, j.ExitCode),
+			)
+		}
+		_ = tw.Flush()
 	},
+}
+
+func uptime(started, exited, now time.Time) string {
+	if started.IsZero() {
+		return "-"
+	}
+	end := now
+	if !exited.IsZero() {
+		end = exited
+	}
+	return end.Sub(started).Round(time.Second).String()
+}
+
+func exitStr(state any, code int) string {
+	s := fmt.Sprint(state)
+	if s == "running" || s == "pending" {
+		return "-"
+	}
+	return fmt.Sprintf("%d", code)
 }
