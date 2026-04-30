@@ -52,7 +52,15 @@ which spawns and tracks the process.`,
 }
 
 func Execute() {
-	rootCmd.AddCommand(supervisorCmd, listCmd, daemonCmd)
+	rootCmd.AddCommand(
+		supervisorCmd,
+		daemonCmd,
+		listCmd,
+		stopCmd,
+		restartCmd,
+		rmCmd,
+		logsCmd,
+	)
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
