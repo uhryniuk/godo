@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -219,7 +220,7 @@ func TestExplicitRestartUsesSameHash(t *testing.T) {
 	}
 }
 
-func TestLogsReturnsStdoutAndStderr(t *testing.T) {
+func TestLogsReturnsCombinedOutput(t *testing.T) {
 	sock, stop := startDaemon(t)
 	defer stop()
 
@@ -239,11 +240,12 @@ func TestLogsReturnsStdoutAndStderr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("logs: %v", err)
 	}
-	if logs.Stdout != "out-line\n" {
-		t.Errorf("stdout: got %q, want %q", logs.Stdout, "out-line\n")
+	got := strings.ReplaceAll(logs.Output, "\r\n", "\n")
+	if !strings.Contains(got, "out-line\n") {
+		t.Errorf("stdout missing from output: %q", got)
 	}
-	if logs.Stderr != "err-line\n" {
-		t.Errorf("stderr: got %q, want %q", logs.Stderr, "err-line\n")
+	if !strings.Contains(got, "err-line\n") {
+		t.Errorf("stderr missing from output: %q", got)
 	}
 }
 

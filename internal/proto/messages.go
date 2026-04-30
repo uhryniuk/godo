@@ -10,13 +10,14 @@ import (
 type Op string
 
 const (
-	OpPing    Op = "Ping"
-	OpRun     Op = "Run"
-	OpList    Op = "List"
-	OpStop    Op = "Stop"
-	OpRestart Op = "Restart"
-	OpRemove  Op = "Remove"
-	OpLogs    Op = "Logs"
+	OpPing       Op = "Ping"
+	OpRun        Op = "Run"
+	OpList       Op = "List"
+	OpStop       Op = "Stop"
+	OpRestart    Op = "Restart"
+	OpRemove     Op = "Remove"
+	OpLogs       Op = "Logs"       // one-shot, returns full content
+	OpLogsFollow Op = "LogsFollow" // streaming: replays then follows
 )
 
 // Request is the envelope for every CLI->daemon RPC.
@@ -79,8 +80,17 @@ type RemoveResponse struct {
 	ID string `json:"id"`
 }
 
-// LogsResponse carries the contents of a job's stdout.log and stderr.log.
+// LogsResponse carries the contents of a job's combined output.log.
+// The PTY merges stdout and stderr at the kernel level, so we have one
+// stream rather than two.
 type LogsResponse struct {
-	Stdout string `json:"stdout"`
-	Stderr string `json:"stderr"`
+	Output string `json:"output"`
+}
+
+// DataFrame is the streaming chunk type used by OpLogsFollow and (later)
+// OpAttach. EOF is set on the final frame so the client can return cleanly
+// without polling for connection close.
+type DataFrame struct {
+	Data []byte `json:"data,omitempty"` // base64 in JSON
+	EOF  bool   `json:"eof,omitempty"`
 }

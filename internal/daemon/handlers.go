@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -127,9 +130,98 @@ func (d *Daemon) handleLogs(req proto.Request) proto.Response {
 	if errResp != nil {
 		return *errResp
 	}
-	stdout, _ := os.ReadFile(filepath.Join(j.LogDir, "stdout.log"))
-	stderr, _ := os.ReadFile(filepath.Join(j.LogDir, "stderr.log"))
-	return ok(proto.LogsResponse{Stdout: string(stdout), Stderr: string(stderr)})
+	body, _ := os.ReadFile(filepath.Join(j.LogDir, outputLogName))
+	return ok(proto.LogsResponse{Output: string(body)})
+}
+
+// handleLogsFollow streams the job's combined log: first replays the
+// existing on-disk content up to the moment of subscription, then forwards
+// live writes from the multiplexer until the job exits or the client
+// disconnects. The replay/follow handoff is atomic: SubscribeWithLockedSnapshot
+// captures the file size and registers the subscriber under the same
+// mux lock, so no chunk is dropped or duplicated across the boundary.
+func (d *Daemon) handleLogsFollow(req proto.Request, conn net.Conn) {
+	j, errResp := d.resolveTarget(req)
+	if errResp != nil {
+		_ = proto.WriteFrame(conn, *errResp)
+		return
+	}
+	if err := proto.WriteFrame(conn, proto.Response{OK: true}); err != nil {
+		return
+	}
+
+	logPath := filepath.Join(j.LogDir, outputLogName)
+	f, err := os.Open(logPath)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		_ = proto.WriteFrame(conn, proto.DataFrame{EOF: true})
+		return
+	}
+	if f != nil {
+		defer f.Close()
+	}
+
+	mux := d.runner.Multiplexer(j.Hash)
+
+	var (
+		sub      *Subscriber
+		fileSize int64
+	)
+	if mux != nil {
+		s, snap, err := mux.SubscribeWithLockedSnapshot(func() (any, error) {
+			if f == nil {
+				return int64(0), nil
+			}
+			info, statErr := f.Stat()
+			if statErr != nil {
+				return int64(0), nil
+			}
+			return info.Size(), nil
+		})
+		if err == nil {
+			sub = s
+			fileSize, _ = snap.(int64)
+			defer sub.Cancel()
+		}
+	} else if f != nil {
+		info, _ := f.Stat()
+		fileSize = info.Size()
+	}
+
+	// Replay [0, fileSize) from disk.
+	if f != nil && fileSize > 0 {
+		if _, err := f.Seek(0, io.SeekStart); err == nil {
+			remaining := fileSize
+			buf := make([]byte, 4096)
+			for remaining > 0 {
+				n := int64(len(buf))
+				if n > remaining {
+					n = remaining
+				}
+				read, rerr := f.Read(buf[:n])
+				if read > 0 {
+					if werr := proto.WriteFrame(conn, proto.DataFrame{Data: buf[:read]}); werr != nil {
+						return
+					}
+					remaining -= int64(read)
+				}
+				if rerr != nil {
+					break
+				}
+			}
+		}
+	}
+
+	// Forward live writes until the mux closes (job exit) or the client
+	// disconnects (write fails).
+	if sub != nil {
+		for chunk := range sub.Ch {
+			if err := proto.WriteFrame(conn, proto.DataFrame{Data: chunk}); err != nil {
+				return
+			}
+		}
+	}
+
+	_ = proto.WriteFrame(conn, proto.DataFrame{EOF: true})
 }
 
 // onJobExit applies the restart policy. Called from runner.watch after
@@ -137,6 +229,12 @@ func (d *Daemon) handleLogs(req proto.Request) proto.Response {
 func (d *Daemon) onJobExit(hash string, exitCode int, state job.State) {
 	if state == job.Cancelled {
 		return // user-requested stop, no auto restart
+	}
+	// Stop may have raced with the watcher and lost the state-update
+	// race; honor the stoppedManually flag regardless of recorded state
+	// so a Stop is never silently overridden by a restart.
+	if d.runner.WasStopped(hash) {
+		return
 	}
 	snap, err := d.registry.GetCopy(hash)
 	if err != nil {

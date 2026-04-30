@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -72,9 +73,11 @@ func TestRunnerCapturesNonZeroExit(t *testing.T) {
 	}
 }
 
-func TestRunnerWritesStdoutAndStderr(t *testing.T) {
+func TestRunnerWritesCombinedOutputLog(t *testing.T) {
 	r, reg := newTestRunner(t)
 	logDir := filepath.Join(t.TempDir(), "log")
+	// PTY merges stdout+stderr at the kernel level — both end up in
+	// output.log, in interleaved order.
 	j := job.New("/bin/sh", []string{"-c", "echo to-stdout; echo to-stderr 1>&2"},
 		job.WithLogDir(logDir))
 	_ = reg.Add(j)
@@ -83,20 +86,24 @@ func TestRunnerWritesStdoutAndStderr(t *testing.T) {
 	}
 	waitForState(t, reg, j.Hash, job.Completed, 3*time.Second)
 
-	stdout, err := os.ReadFile(filepath.Join(logDir, "stdout.log"))
+	body, err := os.ReadFile(filepath.Join(logDir, outputLogName))
 	if err != nil {
-		t.Fatalf("read stdout.log: %v", err)
+		t.Fatalf("read output.log: %v", err)
 	}
-	if string(stdout) != "to-stdout\n" {
-		t.Errorf("stdout: got %q, want %q", stdout, "to-stdout\n")
+	got := normalizeNewlines(string(body))
+	// Order is not guaranteed across the two FDs, just both must appear.
+	if !strings.Contains(got, "to-stdout\n") {
+		t.Errorf("stdout missing from output.log: %q", got)
 	}
-	stderr, err := os.ReadFile(filepath.Join(logDir, "stderr.log"))
-	if err != nil {
-		t.Fatalf("read stderr.log: %v", err)
+	if !strings.Contains(got, "to-stderr\n") {
+		t.Errorf("stderr missing from output.log: %q", got)
 	}
-	if string(stderr) != "to-stderr\n" {
-		t.Errorf("stderr: got %q, want %q", stderr, "to-stderr\n")
-	}
+}
+
+// normalizeNewlines collapses CRLF to LF. The PTY puts the slave in
+// "cooked" mode by default which translates LF to CRLF on output.
+func normalizeNewlines(s string) string {
+	return strings.ReplaceAll(s, "\r\n", "\n")
 }
 
 func TestRunnerInheritsAndOverridesEnv(t *testing.T) {
@@ -110,12 +117,12 @@ func TestRunnerInheritsAndOverridesEnv(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	waitForState(t, reg, j.Hash, job.Completed, 3*time.Second)
-	stdout, err := os.ReadFile(filepath.Join(logDir, "stdout.log"))
+	body, err := os.ReadFile(filepath.Join(logDir, outputLogName))
 	if err != nil {
-		t.Fatalf("read stdout: %v", err)
+		t.Fatalf("read output.log: %v", err)
 	}
-	if string(stdout) != "value-set\n" {
-		t.Errorf("env: got %q, want %q", stdout, "value-set\n")
+	if got := normalizeNewlines(string(body)); got != "value-set\n" {
+		t.Errorf("env: got %q, want %q", got, "value-set\n")
 	}
 }
 

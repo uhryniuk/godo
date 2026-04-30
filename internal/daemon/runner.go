@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -10,8 +12,25 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/creack/pty"
+
 	"github.com/uhryniuk/godo/internal/job"
 )
+
+// outputLogName is the basename of the per-job combined log file. Single
+// file because PTY merges stdout and stderr at the kernel level.
+const outputLogName = "output.log"
+
+// runningProc bundles all live state for one supervised process.
+type runningProc struct {
+	cmd     *exec.Cmd
+	ptmx    *os.File     // PTY master; child's stdio is bound to the slave
+	mux     *Multiplexer // fanout for PTY-master reads
+	logFile *os.File     // per-job output.log; subscribed to mux
+
+	readerDone chan struct{} // closed when the PTY reader goroutine exits
+	writerDone chan struct{} // closed when the log writer goroutine exits
+}
 
 // Runner spawns and supervises child processes. One Runner per daemon.
 type Runner struct {
@@ -19,59 +38,79 @@ type Runner struct {
 	saveFn   func() error // called after every state transition
 	onExit   func(hash string, exitCode int, state job.State)
 
-	mu       sync.Mutex
-	procs    map[string]*exec.Cmd // hash -> cmd, used by Stop and the watcher
-	watchers sync.WaitGroup       // tracks live watch goroutines
+	mu              sync.Mutex
+	procs           map[string]*runningProc
+	stoppedManually map[string]bool // user requested Stop; cleared on next Start
+	watchers        sync.WaitGroup
 }
 
 // NewRunner constructs a Runner. saveFn is invoked after every job state
 // transition; pass a no-op if you don't need persistence.
 func NewRunner(reg *Registry, saveFn func() error) *Runner {
 	return &Runner{
-		registry: reg,
-		saveFn:   saveFn,
-		procs:    make(map[string]*exec.Cmd),
+		registry:        reg,
+		saveFn:          saveFn,
+		procs:           make(map[string]*runningProc),
+		stoppedManually: make(map[string]bool),
 	}
 }
 
-// Start spawns j's process. Returns once the child is started (PID known)
-// or with an error if exec failed. A goroutine watches for exit and
-// updates j's terminal state via the registry's locked Update path so
-// concurrent reads (e.g. List) stay race-free.
+// WasStopped reports whether Stop was called for hash since the last
+// Start. The reaper consults this so a restart-policy spawn cannot beat
+// a user-issued Stop into the procs map.
+func (r *Runner) WasStopped(hash string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stoppedManually[hash]
+}
+
+// Multiplexer returns the live mux for hash, or nil if the job is not
+// running. Used by the Logs streaming handler to subscribe.
+func (r *Runner) Multiplexer(hash string) *Multiplexer {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if rp, ok := r.procs[hash]; ok {
+		return rp.mux
+	}
+	return nil
+}
+
+// Start spawns j's process under a PTY. Returns once exec succeeds (PID
+// known) or with an error if exec failed. The PTY reader, log writer,
+// and exit watcher all run as goroutines tracked on the Runner.
 //
 // j must already be registered in r.registry before calling Start.
+//
+// Start clears any prior stoppedManually flag for j.Hash so explicit
+// restarts (or new auto-restarts after a fresh user Run) can proceed.
 func (r *Runner) Start(j *job.Job) error {
 	if !j.State.CanTransition(job.Running) {
 		return fmt.Errorf("cannot start job in state %s", j.State)
 	}
 
+	r.mu.Lock()
+	delete(r.stoppedManually, j.Hash)
+	r.mu.Unlock()
+
 	if err := os.MkdirAll(j.LogDir, 0o755); err != nil {
 		return fmt.Errorf("create log dir: %w", err)
 	}
-	stdout, err := os.OpenFile(filepath.Join(j.LogDir, "stdout.log"),
+	logFile, err := os.OpenFile(filepath.Join(j.LogDir, outputLogName),
 		os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return fmt.Errorf("open stdout log: %w", err)
-	}
-	stderr, err := os.OpenFile(filepath.Join(j.LogDir, "stderr.log"),
-		os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		stdout.Close()
-		return fmt.Errorf("open stderr log: %w", err)
+		return fmt.Errorf("open output log: %w", err)
 	}
 
 	cmd := exec.Command(j.Command, j.Args...)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	cmd.Stdin = nil
 	cmd.Dir = j.WorkingDir
 	cmd.Env = mergedEnv(j.Env)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	// pty.Start sets SysProcAttr to {Setsid: true, Setctty: true, Ctty: 0}
+	// so we don't need to configure them here.
 
-	if err := cmd.Start(); err != nil {
-		stdout.Close()
-		stderr.Close()
-		return fmt.Errorf("exec: %w", err)
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		logFile.Close()
+		return fmt.Errorf("pty.Start: %w", err)
 	}
 
 	pid := cmd.Process.Pid
@@ -86,8 +125,8 @@ func (r *Runner) Start(j *job.Job) error {
 		j.ExitedAt = time.Time{}
 		j.ExitCode = 0
 	}); err != nil {
-		stdout.Close()
-		stderr.Close()
+		_ = ptmx.Close()
+		logFile.Close()
 		return fmt.Errorf("update registry: %w", err)
 	}
 
@@ -97,9 +136,51 @@ func (r *Runner) Start(j *job.Job) error {
 		}
 	}
 
+	mux := NewMultiplexer(64)
+	logSub := mux.Subscribe()
+
+	rp := &runningProc{
+		cmd:        cmd,
+		ptmx:       ptmx,
+		mux:        mux,
+		logFile:    logFile,
+		readerDone: make(chan struct{}),
+		writerDone: make(chan struct{}),
+	}
 	r.mu.Lock()
-	r.procs[hash] = cmd
+	r.procs[hash] = rp
 	r.mu.Unlock()
+
+	// PTY reader: drain ptmx into mux until EOF (child exit closes slave).
+	go func() {
+		defer close(rp.readerDone)
+		buf := make([]byte, 4096)
+		for {
+			n, err := ptmx.Read(buf)
+			if n > 0 {
+				_, _ = mux.Write(buf[:n])
+			}
+			if err != nil {
+				// EOF on child exit; EIO on Linux when slave closes.
+				return
+			}
+		}
+	}()
+
+	// Log writer: drain mux subscription to disk. Exits when mux closes.
+	go func() {
+		defer close(rp.writerDone)
+		defer logFile.Close()
+		for chunk := range logSub.Ch {
+			if _, err := logFile.Write(chunk); err != nil {
+				slog.Warn("write log", "err", err)
+				// Drop the rest; don't tear down the job for a bad disk.
+				for range logSub.Ch {
+				}
+				return
+			}
+		}
+	}()
 
 	if err := r.save(); err != nil {
 		slog.Warn("save after start", "err", err)
@@ -108,41 +189,39 @@ func (r *Runner) Start(j *job.Job) error {
 	r.watchers.Add(1)
 	go func() {
 		defer r.watchers.Done()
-		r.watch(hash, cmd, stdout, stderr)
+		r.watch(hash, rp)
 	}()
 
 	return nil
 }
 
-// Wait blocks until every in-flight watch goroutine has exited. Daemon
-// shutdown calls this after Stop'ing all running jobs.
-func (r *Runner) Wait() {
-	r.watchers.Wait()
-}
+func (r *Runner) watch(hash string, rp *runningProc) {
+	err := rp.cmd.Wait()
 
-// StopAll signals every currently-running job. The watchers exit on
-// their own once cmd.Wait returns.
-func (r *Runner) StopAll() {
-	for _, j := range r.registry.Snapshot() {
-		if j.State == job.Running {
-			_ = r.Stop(j.Hash)
-		}
+	// Prefer letting the PTY reader exit naturally so we don't truncate
+	// any final buffered output. On some kernels the master read can
+	// block past child exit; force-close as a backstop after a brief
+	// grace period.
+	select {
+	case <-rp.readerDone:
+	case <-time.After(100 * time.Millisecond):
+		_ = rp.ptmx.Close()
+		<-rp.readerDone
 	}
-}
+	_ = rp.ptmx.Close()
 
-func (r *Runner) watch(hash string, cmd *exec.Cmd, stdout, stderr *os.File) {
-	defer stdout.Close()
-	defer stderr.Close()
-
-	err := cmd.Wait()
+	// Tear down fanout: signals the log writer to drain and exit, plus
+	// any logs-follow subscribers see channel close.
+	rp.mux.Close()
+	<-rp.writerDone
 
 	r.mu.Lock()
 	delete(r.procs, hash)
 	r.mu.Unlock()
 
 	exitCode := 0
-	if cmd.ProcessState != nil {
-		exitCode = cmd.ProcessState.ExitCode()
+	if rp.cmd.ProcessState != nil {
+		exitCode = rp.cmd.ProcessState.ExitCode()
 	}
 	now := time.Now()
 
@@ -151,12 +230,9 @@ func (r *Runner) watch(hash string, cmd *exec.Cmd, stdout, stderr *os.File) {
 	_ = r.registry.Update(hash, func(j *job.Job) {
 		j.ExitCode = exitCode
 		j.ExitedAt = now
-		// Cancelled wins regardless of exit code: Stop sets it BEFORE
-		// signalling, and an in-flight clean exit must not clobber the
-		// user's intent.
 		switch {
 		case j.State == job.Cancelled:
-			// keep
+			// keep — Stop set this before signalling
 		case exitCode == 0:
 			j.State = job.Completed
 		default:
@@ -167,7 +243,7 @@ func (r *Runner) watch(hash string, cmd *exec.Cmd, stdout, stderr *os.File) {
 		finalState = j.State
 	})
 
-	if err != nil {
+	if err != nil && !isExpectedExitErr(err) {
 		slog.Info("job exited", "id", shortID, "name", name, "code", exitCode, "err", err)
 	} else {
 		slog.Info("job exited", "id", shortID, "name", name, "code", exitCode)
@@ -182,6 +258,16 @@ func (r *Runner) watch(hash string, cmd *exec.Cmd, stdout, stderr *os.File) {
 	}
 }
 
+// isExpectedExitErr returns true for errors that are normal in our
+// shutdown paths and not worth logging as a fault.
+func isExpectedExitErr(err error) bool {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return true
+	}
+	return errors.Is(err, io.EOF)
+}
+
 // Stop signals the running process for hash with SIGTERM. Sets job state
 // to Cancelled BEFORE signalling so the watcher does not clobber it with
 // Completed/Failed when the process exits.
@@ -193,7 +279,8 @@ func (r *Runner) watch(hash string, cmd *exec.Cmd, stdout, stderr *os.File) {
 // land within a few seconds, the user can re-issue Stop. (TODO.md)
 func (r *Runner) Stop(hash string) error {
 	r.mu.Lock()
-	cmd, isRunning := r.procs[hash]
+	r.stoppedManually[hash] = true
+	rp, isRunning := r.procs[hash]
 	r.mu.Unlock()
 
 	if !isRunning {
@@ -212,10 +299,10 @@ func (r *Runner) Stop(hash string) error {
 		return err
 	}
 
-	// Negative pid = process group, because the runner started the child
-	// with Setsid. This signals the child AND any grandchildren it forked.
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
-		return fmt.Errorf("sigterm pgid %d: %w", cmd.Process.Pid, err)
+	// Negative pid = process group, because pty.Start sets Setsid. Hits
+	// the child AND any grandchildren it forked.
+	if err := syscall.Kill(-rp.cmd.Process.Pid, syscall.SIGTERM); err != nil {
+		return fmt.Errorf("sigterm pgid %d: %w", rp.cmd.Process.Pid, err)
 	}
 	return nil
 }
@@ -227,11 +314,18 @@ func (r *Runner) SetOnExit(fn func(hash string, exitCode int, state job.State)) 
 	r.onExit = fn
 }
 
-func (r *Runner) save() error {
-	if r.saveFn == nil {
-		return nil
+// Wait blocks until every in-flight watch goroutine has exited.
+func (r *Runner) Wait() {
+	r.watchers.Wait()
+}
+
+// StopAll signals every currently-running job. Used by daemon shutdown.
+func (r *Runner) StopAll() {
+	for _, j := range r.registry.Snapshot() {
+		if j.State == job.Running {
+			_ = r.Stop(j.Hash)
+		}
 	}
-	return r.saveFn()
 }
 
 func mergedEnv(extra map[string]string) []string {
@@ -240,4 +334,11 @@ func mergedEnv(extra map[string]string) []string {
 		out = append(out, k+"="+v)
 	}
 	return out
+}
+
+func (r *Runner) save() error {
+	if r.saveFn == nil {
+		return nil
+	}
+	return r.saveFn()
 }

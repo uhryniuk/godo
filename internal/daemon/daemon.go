@@ -124,9 +124,31 @@ func (d *Daemon) handleConn(conn net.Conn) {
 		slog.Error("read request frame", "err", err)
 		return
 	}
+	if isStreamOp(req.Op) {
+		d.dispatchStream(req, conn)
+		return
+	}
 	resp := d.dispatch(req)
 	if err := proto.WriteFrame(conn, resp); err != nil {
 		slog.Error("write response frame", "err", err)
+	}
+}
+
+// isStreamOp reports whether op uses the streaming wire protocol (ack
+// Response followed by N DataFrames) rather than single Request/Response.
+func isStreamOp(op proto.Op) bool {
+	return op == proto.OpLogsFollow
+}
+
+func (d *Daemon) dispatchStream(req proto.Request, conn net.Conn) {
+	switch req.Op {
+	case proto.OpLogsFollow:
+		d.handleLogsFollow(req, conn)
+	default:
+		_ = proto.WriteFrame(conn, proto.Response{
+			OK:    false,
+			Error: fmt.Sprintf("unknown stream op: %s", req.Op),
+		})
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"time"
 )
@@ -109,8 +110,8 @@ func (c *Client) Remove(ctx context.Context, target string) (*RemoveResponse, er
 	return &out, nil
 }
 
-// Logs returns the full contents of the job's stdout.log and stderr.log
-// files. Streaming follow is added in Step 5.
+// Logs returns the full contents of the job's combined output.log
+// (PTY-merged stdout and stderr).
 func (c *Client) Logs(ctx context.Context, target string) (*LogsResponse, error) {
 	body, _ := json.Marshal(TargetRequest{Target: target})
 	var out LogsResponse
@@ -118,6 +119,63 @@ func (c *Client) Logs(ctx context.Context, target string) (*LogsResponse, error)
 		return nil, err
 	}
 	return &out, nil
+}
+
+// LogsFollow opens a streaming connection that first replays existing
+// log content then forwards live writes. fn is called for every chunk.
+// Returns when the daemon sends an EOF frame, the connection breaks,
+// ctx is cancelled, or fn returns an error.
+func (c *Client) LogsFollow(ctx context.Context, target string, fn func(chunk []byte) error) error {
+	body, _ := json.Marshal(TargetRequest{Target: target})
+
+	conn, err := c.Dial(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if dl, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(dl)
+	}
+	// Cancel via ctx by closing the conn from a goroutine.
+	cancelCh := make(chan struct{})
+	defer close(cancelCh)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-cancelCh:
+		}
+	}()
+
+	if err := WriteFrame(conn, Request{Op: OpLogsFollow, Body: body}); err != nil {
+		return err
+	}
+	var ack Response
+	if err := ReadFrame(conn, &ack); err != nil {
+		return err
+	}
+	if !ack.OK {
+		return fmt.Errorf("daemon: %s", ack.Error)
+	}
+
+	for {
+		var df DataFrame
+		if err := ReadFrame(conn, &df); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		if len(df.Data) > 0 {
+			if err := fn(df.Data); err != nil {
+				return err
+			}
+		}
+		if df.EOF {
+			return nil
+		}
+	}
 }
 
 // callTyped is a helper that performs Call, checks OK, and unmarshals
