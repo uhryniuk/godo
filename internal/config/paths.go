@@ -10,9 +10,12 @@ import (
 )
 
 const (
-  CONFIG_DIR = ".godo"
-  CONFIG_FILE = "config.json"
-  JOB_DIR = ".hash"
+  CONFIG_DIR  = ".godo"
+  CONFIG_FILE = "config.toml"
+  JOB_DIR     = ".hash"
+  SERVICE_DIR = "services"
+  STATE_DIR   = "state"
+  SOCKET_FILE = "godo.sock"
 )
 
 // NOTE CliConfig is a skeleton struct for later work.
@@ -23,10 +26,10 @@ type CliConfig struct {}
 func InitConfig() *CliConfig {
   
   // Ensure all config paths exist
-  dirs := []string{GetConfigPath(), GetJobDir()}
+  dirs := []string{GetConfigPath(), GetJobDir(), GetServiceDir(), GetStateDir()}
   for _, dir := range dirs {
     if !utils.FileExists(dir) {
-      os.Mkdir(dir, 0644)
+      os.MkdirAll(dir, 0755)
     }
   }
 
@@ -53,9 +56,25 @@ func GetConfigPath() string {
 }
 
 func GetConfigFile() string {
-  return filepath.Join(GetConfigPath(), JOB_DIR)
+  return filepath.Join(GetConfigPath(), CONFIG_FILE)
 }
 
 func GetJobDir() string {
   return filepath.Join(GetConfigPath(), JOB_DIR)
+}
+
+func GetServiceDir() string {
+  return filepath.Join(GetConfigPath(), SERVICE_DIR)
+}
+
+func GetStateDir() string {
+  return filepath.Join(GetConfigPath(), STATE_DIR)
+}
+
+func GetLogDir(jobID string) string {
+  return filepath.Join(GetStateDir(), jobID)
+}
+
+func GetSocketPath() string {
+  return filepath.Join(GetStateDir(), SOCKET_FILE)
 }
