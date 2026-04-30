@@ -6,10 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	config "github.com/uhryniuk/godo/internal/config"
 	"path/filepath"
 	"strings"
 	"time"
-  config "github.com/uhryniuk/godo/internal/config"
 )
 
 // JobState represents the execution state of a Job.
@@ -37,7 +37,7 @@ const (
 // process ID, a unique hash identifier, and its current execution state.
 type Job struct {
 	Hash       string   // Unique identifier for the job (SHA-256)
-	Name       string // Human-readable name for the job
+	Name       string   // Human-readable name for the job
 	Command    string   // Command to be executed
 	Args       []string // Arguments to pass to the command
 	StdoutPath string   // File path for redirecting standard output
@@ -79,34 +79,32 @@ func generateJobHash(command string, args []string) string {
 
 type JobOption func(*Job)
 
-
 func WithName(name string) JobOption {
-  return func(j *Job) {
-    j.Name = name
-  }
+	return func(j *Job) {
+		j.Name = name
+	}
 }
 
 func WithStdoutPath(path string) JobOption {
-  return func(j *Job) {
-    j.StdoutPath = path
-  }
+	return func(j *Job) {
+		j.StdoutPath = path
+	}
 }
 
-
 func WithStderrPath(path string) JobOption {
-  return func(j *Job) {
-    j.StderrPath = path
-  }
+	return func(j *Job) {
+		j.StderrPath = path
+	}
 }
 
 func WithPID(pid int) JobOption {
-  return func(j *Job) {
-    j.PID = pid
-  }
+	return func(j *Job) {
+		j.PID = pid
+	}
 }
 
 func WithState(state JobState) JobOption {
-  return func(j *Job) {
-    j.State = state
-  }
+	return func(j *Job) {
+		j.State = state
+	}
 }

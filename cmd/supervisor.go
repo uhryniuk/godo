@@ -7,9 +7,9 @@ import (
 )
 
 var supervisorCmd = &cobra.Command{
-  Use: "supervisor",
-  Hidden: true,
-  Run: func(cmd *cobra.Command, args []string) {
-    fmt.Println(cmd, args)
-  },
+	Use:    "supervisor",
+	Hidden: true,
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println(cmd, args)
+	},
 }

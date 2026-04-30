@@ -7,10 +7,10 @@ import (
 )
 
 var listCmd = &cobra.Command{
-  Use: "list",
-  Short: "List all jobs",
-  Long: "TODO",
-  Run: func(cmd *cobra.Command, args []string) {
-    fmt.Println(cmd, args)
-  },
+	Use:   "list",
+	Short: "List all jobs",
+	Long:  "TODO",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println(cmd, args)
+	},
 }

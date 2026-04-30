@@ -1,10 +1,10 @@
 package utils
 
 import (
-  "os"
+	"os"
 )
 
 func FileExists(path string) bool {
-    _, err := os.Stat(path)
-    return err == nil || !os.IsNotExist(err)
+	_, err := os.Stat(path)
+	return err == nil || !os.IsNotExist(err)
 }
