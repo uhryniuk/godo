@@ -1,6 +1,6 @@
 // Package daemon implements the godo supervisor daemon. It listens on a
-// Unix socket, dispatches RPCs from the proto package, and (later) owns
-// the lifecycle of every child process.
+// Unix socket, dispatches RPCs from the proto package, owns the registry
+// of jobs, and supervises every child process via Runner.
 package daemon
 
 import (
@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 
@@ -24,17 +25,38 @@ const Version = "0.0.1"
 // Daemon is the supervisor server. Construct with New and call Run to block.
 type Daemon struct {
 	socketPath string
-	listener   net.Listener
-	wg         sync.WaitGroup
+	stateDir   string
+
+	registry *Registry
+	runner   *Runner
+
+	listener net.Listener
+	wg       sync.WaitGroup
 }
 
+// New constructs a Daemon. The state directory is derived from the
+// socket path's parent — that's where registry.json and per-job log
+// directories live.
 func New(socketPath string) *Daemon {
-	return &Daemon{socketPath: socketPath}
+	stateDir := filepath.Dir(socketPath)
+	d := &Daemon{
+		socketPath: socketPath,
+		stateDir:   stateDir,
+		registry:   NewRegistry(),
+	}
+	d.runner = NewRunner(d.registry, func() error {
+		return SaveRegistry(d.stateDir, d.registry)
+	})
+	return d
 }
 
 // Run starts the daemon. It blocks until ctx is cancelled or SIGTERM/SIGINT
 // is received. The Unix socket file is removed on exit.
 func (d *Daemon) Run(ctx context.Context) error {
+	if err := LoadRegistry(d.stateDir, d.registry); err != nil {
+		slog.Warn("load registry on boot", "err", err)
+	}
+
 	// Remove stale socket from a prior crashed daemon. If a live daemon owns
 	// it, the Listen call below will fail and we exit cleanly.
 	_ = os.Remove(d.socketPath)
@@ -79,6 +101,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	d.wg.Wait()
 	_ = os.Remove(d.socketPath)
+	if err := SaveRegistry(d.stateDir, d.registry); err != nil {
+		slog.Warn("save registry on shutdown", "err", err)
+	}
 	slog.Info("daemon stopped", "reason", <-shutdownReason)
 	return nil
 }
@@ -93,15 +118,6 @@ func (d *Daemon) handleConn(conn net.Conn) {
 	resp := d.dispatch(req)
 	if err := proto.WriteFrame(conn, resp); err != nil {
 		slog.Error("write response frame", "err", err)
-	}
-}
-
-func (d *Daemon) dispatch(req proto.Request) proto.Response {
-	switch req.Op {
-	case proto.OpPing:
-		return ok(proto.PingResponse{Version: Version, PID: os.Getpid()})
-	default:
-		return proto.Response{OK: false, Error: fmt.Sprintf("unknown op: %s", req.Op)}
 	}
 }
 
