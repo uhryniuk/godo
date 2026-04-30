@@ -44,10 +44,15 @@ func New(socketPath string) *Daemon {
 		stateDir:   stateDir,
 		registry:   NewRegistry(),
 	}
-	d.runner = NewRunner(d.registry, func() error {
-		return SaveRegistry(d.stateDir, d.registry)
-	})
+	d.runner = NewRunner(d.registry, d.Save)
+	d.runner.SetOnExit(d.onJobExit)
 	return d
+}
+
+// Save snapshots the registry to disk. Exposed as a method so handlers
+// can persist after Remove etc. without taking another route.
+func (d *Daemon) Save() error {
+	return SaveRegistry(d.stateDir, d.registry)
 }
 
 // Run starts the daemon. It blocks until ctx is cancelled or SIGTERM/SIGINT
@@ -100,6 +105,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 
 	d.wg.Wait()
+	// Halt every supervised child and wait for their watchers to finish
+	// so no goroutine writes to the registry after we save it below.
+	d.runner.StopAll()
+	d.runner.Wait()
 	_ = os.Remove(d.socketPath)
 	if err := SaveRegistry(d.stateDir, d.registry); err != nil {
 		slog.Warn("save registry on shutdown", "err", err)

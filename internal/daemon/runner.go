@@ -17,9 +17,11 @@ import (
 type Runner struct {
 	registry *Registry
 	saveFn   func() error // called after every state transition
+	onExit   func(hash string, exitCode int, state job.State)
 
-	mu    sync.Mutex
-	procs map[string]*exec.Cmd // hash -> cmd, for future Stop support
+	mu       sync.Mutex
+	procs    map[string]*exec.Cmd // hash -> cmd, used by Stop and the watcher
+	watchers sync.WaitGroup       // tracks live watch goroutines
 }
 
 // NewRunner constructs a Runner. saveFn is invoked after every job state
@@ -103,9 +105,29 @@ func (r *Runner) Start(j *job.Job) error {
 		slog.Warn("save after start", "err", err)
 	}
 
-	go r.watch(hash, cmd, stdout, stderr)
+	r.watchers.Add(1)
+	go func() {
+		defer r.watchers.Done()
+		r.watch(hash, cmd, stdout, stderr)
+	}()
 
 	return nil
+}
+
+// Wait blocks until every in-flight watch goroutine has exited. Daemon
+// shutdown calls this after Stop'ing all running jobs.
+func (r *Runner) Wait() {
+	r.watchers.Wait()
+}
+
+// StopAll signals every currently-running job. The watchers exit on
+// their own once cmd.Wait returns.
+func (r *Runner) StopAll() {
+	for _, j := range r.registry.Snapshot() {
+		if j.State == job.Running {
+			_ = r.Stop(j.Hash)
+		}
+	}
 }
 
 func (r *Runner) watch(hash string, cmd *exec.Cmd, stdout, stderr *os.File) {
@@ -125,23 +147,24 @@ func (r *Runner) watch(hash string, cmd *exec.Cmd, stdout, stderr *os.File) {
 	now := time.Now()
 
 	var name, shortID string
+	var finalState job.State
 	_ = r.registry.Update(hash, func(j *job.Job) {
 		j.ExitCode = exitCode
 		j.ExitedAt = now
+		// Cancelled wins regardless of exit code: Stop sets it BEFORE
+		// signalling, and an in-flight clean exit must not clobber the
+		// user's intent.
 		switch {
+		case j.State == job.Cancelled:
+			// keep
 		case exitCode == 0:
 			j.State = job.Completed
 		default:
-			// Non-zero (or signal-killed: negative) exit. Step 4's Stop
-			// will set Cancelled BEFORE sending the signal, so by the
-			// time we get here a "Cancelled" state is already in place
-			// and we mustn't clobber it.
-			if j.State != job.Cancelled {
-				j.State = job.Failed
-			}
+			j.State = job.Failed
 		}
 		name = j.Name
 		shortID = j.ShortID()
+		finalState = j.State
 	})
 
 	if err != nil {
@@ -153,6 +176,55 @@ func (r *Runner) watch(hash string, cmd *exec.Cmd, stdout, stderr *os.File) {
 	if err := r.save(); err != nil {
 		slog.Warn("save after exit", "err", err)
 	}
+
+	if r.onExit != nil {
+		r.onExit(hash, exitCode, finalState)
+	}
+}
+
+// Stop signals the running process for hash with SIGTERM. Sets job state
+// to Cancelled BEFORE signalling so the watcher does not clobber it with
+// Completed/Failed when the process exits.
+//
+// If the job is Pending (registered but not yet started) it transitions
+// straight to Cancelled. If it has already exited, Stop is a no-op.
+//
+// SIGKILL escalation is intentionally not part of v1; if SIGTERM does not
+// land within a few seconds, the user can re-issue Stop. (TODO.md)
+func (r *Runner) Stop(hash string) error {
+	r.mu.Lock()
+	cmd, isRunning := r.procs[hash]
+	r.mu.Unlock()
+
+	if !isRunning {
+		return r.registry.Update(hash, func(j *job.Job) {
+			if j.State == job.Pending {
+				j.State = job.Cancelled
+			}
+		})
+	}
+
+	if err := r.registry.Update(hash, func(j *job.Job) {
+		if j.State == job.Running {
+			j.State = job.Cancelled
+		}
+	}); err != nil {
+		return err
+	}
+
+	// Negative pid = process group, because the runner started the child
+	// with Setsid. This signals the child AND any grandchildren it forked.
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
+		return fmt.Errorf("sigterm pgid %d: %w", cmd.Process.Pid, err)
+	}
+	return nil
+}
+
+// SetOnExit installs a callback that fires after the watch goroutine has
+// recorded a child's terminal state. The daemon uses this to apply the
+// restart policy without baking policy decisions into the runner.
+func (r *Runner) SetOnExit(fn func(hash string, exitCode int, state job.State)) {
+	r.onExit = fn
 }
 
 func (r *Runner) save() error {
