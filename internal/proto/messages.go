@@ -10,9 +10,13 @@ import (
 type Op string
 
 const (
-	OpPing Op = "Ping"
-	OpRun  Op = "Run"
-	OpList Op = "List"
+	OpPing    Op = "Ping"
+	OpRun     Op = "Run"
+	OpList    Op = "List"
+	OpStop    Op = "Stop"
+	OpRestart Op = "Restart"
+	OpRemove  Op = "Remove"
+	OpLogs    Op = "Logs"
 )
 
 // Request is the envelope for every CLI->daemon RPC.
@@ -53,4 +57,30 @@ type RunResponse struct {
 // ListResponse is the body of an OpList reply.
 type ListResponse struct {
 	Jobs []job.Job `json:"jobs"`
+}
+
+// TargetRequest is shared by Stop, Restart, Remove, and Logs. Target is
+// either a job name or a hash prefix.
+type TargetRequest struct {
+	Target string `json:"target"`
+}
+
+// StopResponse, RestartResponse, RemoveResponse all carry the affected job
+// snapshot for display.
+type StopResponse struct {
+	Job job.Job `json:"job"`
+}
+
+type RestartResponse struct {
+	Job job.Job `json:"job"`
+}
+
+type RemoveResponse struct {
+	ID string `json:"id"`
+}
+
+// LogsResponse carries the contents of a job's stdout.log and stderr.log.
+type LogsResponse struct {
+	Stdout string `json:"stdout"`
+	Stderr string `json:"stderr"`
 }

@@ -76,6 +76,50 @@ func (c *Client) List(ctx context.Context) (*ListResponse, error) {
 	return &out, nil
 }
 
+// Stop SIGTERMs the running process associated with target (name or hash
+// prefix). Idempotent for already-stopped jobs.
+func (c *Client) Stop(ctx context.Context, target string) (*StopResponse, error) {
+	body, _ := json.Marshal(TargetRequest{Target: target})
+	var out StopResponse
+	if err := c.callTyped(ctx, Request{Op: OpStop, Body: body}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Restart stops the job (if running) and starts a fresh instance with the
+// same spec. The returned Job carries the new PID and StartedAt.
+func (c *Client) Restart(ctx context.Context, target string) (*RestartResponse, error) {
+	body, _ := json.Marshal(TargetRequest{Target: target})
+	var out RestartResponse
+	if err := c.callTyped(ctx, Request{Op: OpRestart, Body: body}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Remove drops a stopped job from the registry and deletes its log dir.
+// Errors if the job is still running or pending.
+func (c *Client) Remove(ctx context.Context, target string) (*RemoveResponse, error) {
+	body, _ := json.Marshal(TargetRequest{Target: target})
+	var out RemoveResponse
+	if err := c.callTyped(ctx, Request{Op: OpRemove, Body: body}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Logs returns the full contents of the job's stdout.log and stderr.log
+// files. Streaming follow is added in Step 5.
+func (c *Client) Logs(ctx context.Context, target string) (*LogsResponse, error) {
+	body, _ := json.Marshal(TargetRequest{Target: target})
+	var out LogsResponse
+	if err := c.callTyped(ctx, Request{Op: OpLogs, Body: body}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // callTyped is a helper that performs Call, checks OK, and unmarshals
 // resp.Body into out.
 func (c *Client) callTyped(ctx context.Context, req Request, out any) error {
