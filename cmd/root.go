@@ -87,7 +87,7 @@ var rootCmd = &cobra.Command{
 func Execute() {
 	rootCmd.Flags().Bool("stdout", true, "Redirect stdout from child processes to this process")
 	rootCmd.Flags().Bool("stderr", true, "Redirect stderr from child processes to this process")
-	rootCmd.AddCommand(supervisorCmd, listCmd)
+	rootCmd.AddCommand(supervisorCmd, listCmd, daemonCmd)
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
