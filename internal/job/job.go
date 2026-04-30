@@ -30,28 +30,26 @@ const (
 // CanTransition reports whether moving from s to next is a legal step in
 // the lifecycle.
 //
-//	Pending   -> Running, Cancelled
-//	Running   -> Completed, Failed, Cancelled
-//	Failed    -> Pending     (restart)
-//	Completed -> (terminal)
-//	Cancelled -> (terminal)
+//	Pending                       -> Running, Cancelled
+//	Running                       -> Completed, Failed, Cancelled
+//	Completed, Failed, Cancelled  -> Pending  (restart, manual or by policy)
 func (s State) CanTransition(next State) bool {
 	switch s {
 	case Pending:
 		return next == Running || next == Cancelled
 	case Running:
 		return next == Completed || next == Failed || next == Cancelled
-	case Failed:
+	case Completed, Failed, Cancelled:
 		return next == Pending
-	case Completed, Cancelled:
-		return false
 	}
 	return false
 }
 
-// IsTerminal reports whether s is a non-restartable end state.
-func (s State) IsTerminal() bool {
-	return s == Completed || s == Cancelled
+// IsExited reports whether s is one of the post-execution states. The
+// reaper consults this to decide whether the restart policy should fire.
+// Cancelled counts as exited but is never auto-restarted (user intent).
+func (s State) IsExited() bool {
+	return s == Completed || s == Failed || s == Cancelled
 }
 
 // RestartPolicy controls what the reaper does when a Running job exits.

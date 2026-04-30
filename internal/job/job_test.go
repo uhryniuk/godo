@@ -27,11 +27,11 @@ func TestStateCanTransition(t *testing.T) {
 		{"failed->running", Failed, Running, false},
 		{"failed->completed", Failed, Completed, false},
 
-		{"completed->pending", Completed, Pending, false},
+		{"completed->pending", Completed, Pending, true},
 		{"completed->running", Completed, Running, false},
 		{"completed->cancelled", Completed, Cancelled, false},
 
-		{"cancelled->pending", Cancelled, Pending, false},
+		{"cancelled->pending", Cancelled, Pending, true},
 		{"cancelled->running", Cancelled, Running, false},
 	}
 	for _, c := range cases {
@@ -43,15 +43,15 @@ func TestStateCanTransition(t *testing.T) {
 	}
 }
 
-func TestStateIsTerminal(t *testing.T) {
-	for _, s := range []State{Completed, Cancelled} {
-		if !s.IsTerminal() {
-			t.Errorf("%s should be terminal", s)
+func TestStateIsExited(t *testing.T) {
+	for _, s := range []State{Completed, Failed, Cancelled} {
+		if !s.IsExited() {
+			t.Errorf("%s should be exited", s)
 		}
 	}
-	for _, s := range []State{Pending, Running, Failed} {
-		if s.IsTerminal() {
-			t.Errorf("%s should NOT be terminal", s)
+	for _, s := range []State{Pending, Running} {
+		if s.IsExited() {
+			t.Errorf("%s should NOT be exited", s)
 		}
 	}
 }
