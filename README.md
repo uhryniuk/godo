@@ -6,7 +6,7 @@ A small CLI for running and managing long-lived background processes — like `p
 
 ## Status
 
-Pre-1.0, **in progress**. The CLI surface below works end-to-end on Linux and macOS. PTY attach, declarative service files, cron, and the TUI are not in yet — see [Roadmap](#roadmap).
+Pre-1.0, **in progress**. The CLI surface below works end-to-end on Linux and macOS. Declarative service files, cron, and the TUI are not in yet — see [Roadmap](#roadmap).
 
 ## Build
 
@@ -33,6 +33,10 @@ godo list
 # Tail the combined output (PTY merges stdout + stderr).
 godo logs d2a91e0c
 godo logs -f d2a91e0c        # follow: replays + streams live; Ctrl+C to detach
+
+# Drop into the job's PTY. Type to send to its stdin; see what it prints.
+# Detach with Ctrl+B then 'd' (the job keeps running).
+godo attach d2a91e0c
 
 # Stop, restart, remove.
 godo stop d2a91e0c           # SIGTERM, marks Cancelled
@@ -67,7 +71,8 @@ Targets accept either an exact name or a hash prefix.
 - One daemon per user, listening on `~/.godo/state/godo.sock`.
 - First `godo` invocation acquires a flock on `~/.godo/state/godo.sock.lock`, double-forks `godo supervisor` with `Setsid`, and polls until the socket is ready. Concurrent invocations spawn exactly one daemon.
 - Children run under a real PTY (`creack/pty`) so jobs see a TTY, and stdout/stderr land in one combined `output.log`.
-- The output Multiplexer fans PTY reads out to the log writer plus any active `logs -f` clients with a drop-on-full policy — slow consumers can never block the producer.
+- The output Multiplexer fans PTY reads out to the log writer plus any active `logs -f` and `attach` clients with a drop-on-full policy — slow consumers can never block the producer.
+- An InputMerger sits in front of the PTY master for the input direction. Today only `attach` registers a source; the v2 `godo pipe` will register sending jobs as additional sources without touching the write path.
 - Daemon state persists to `~/.godo/state/registry.json` (atomic write, corrupt-tolerant load) so a restarted daemon remembers what was previously running. Children themselves do not yet survive a daemon restart.
 - Logout-only by design: jobs survive your shell exit but are gone after a reboot. No system-level installation required.
 
@@ -82,6 +87,7 @@ Targets accept either an exact name or a hash prefix.
 | `godo rm <id\|name>`             | Drop a stopped job from the registry and delete its log dir.           |
 | `godo logs <id\|name>`           | Print the job's combined output.                                       |
 | `godo logs -f <id\|name>`        | Stream the log: replays existing content then forwards live writes.    |
+| `godo attach <id\|name>`         | Take over the job's PTY; type into stdin, see stdout. Ctrl+B d detaches. |
 | `godo daemon`                    | Run the supervisor in the foreground (debug / dev).                    |
 
 Hidden: `godo supervisor` is the double-fork target invoked by auto-spawn.
@@ -90,13 +96,12 @@ Hidden: `godo supervisor` is the double-fork target invoked by auto-spawn.
 
 These steps are designed but not shipped:
 
-- **Step 6** — `godo attach <id>` PTY proxy: raw mode, SIGWINCH forward, `Ctrl+B d` detach. Lets you drop into a job's terminal as if it were yours.
 - **Step 7** — TOML service files. Drop `~/.godo/services/web.toml` (systemd-style) and `godo reload` picks it up. Per-service `autostart`, `restart`, `nice`, etc.
 - **Step 8** — Internal cron scheduler. `[cron] schedule = "0 4 * * *"` in a service file fires the command on schedule.
 - **Step 9** — `godo monit` / `godo -i`: Bubble Tea TUI dashboard with sortable rows, hotkeys for restart/kill/log-tail, and in-pane PTY attach.
-- **Step 10** — `--nice` and `--ionice` flags, `godo shutdown`, `godo version`.
+- **Step 10** — `--nice` and `--ionice` flags, `--name` flag for `godo run`, `godo shutdown`, `godo version`.
 
-Beyond v1: live job-to-job piping (`godo pipe A B` fanning A's output into B's input, with the TUI showing the wire). The daemon's output multiplexer and runner are already shaped for this; no v1 refactor is needed.
+Beyond v1: live job-to-job piping (`godo pipe A B` fanning A's output into B's input, with the TUI showing the wire). The daemon's output multiplexer and input merger are already shaped for this; no v1 refactor is needed.
 
 ## Where state lives
 
