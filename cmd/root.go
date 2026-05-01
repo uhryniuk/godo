@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -60,11 +61,17 @@ func warnIfBuildMismatch(cmdName string) {
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "godo [flags] <command> [args...]",
+	Use:   "godo [--name <label>] <command> [args...]",
 	Short: "Run and manage long-lived background processes",
 	Long: `godo runs commands as supervised background processes that survive shell
 logout. Equivalent to 'godo run' — passes its positional args to the daemon
-which spawns and tracks the process.`,
+which spawns and tracks the process.
+
+Pass --name (or -n) before the command to label the job; afterwards
+'godo stop|restart|rm <label>' resolves to it instead of the hash:
+
+    godo --name web sh -c "python3 -m http.server 8888"
+    godo rm web`,
 	DisableFlagParsing: true, // pass everything after 'godo' through to the child
 	Args:               cobra.MinimumNArgs(0),
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
@@ -82,6 +89,16 @@ which spawns and tracks the process.`,
 		if args[0] == "-i" || args[0] == "--interactive" {
 			runMonit()
 			return
+		}
+
+		name, args, err := consumeLeadingName(args)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "godo:", err)
+			os.Exit(1)
+		}
+		if len(args) == 0 {
+			fmt.Fprintln(os.Stderr, "godo: --name requires a command after it")
+			os.Exit(1)
 		}
 
 		// Catch the "godo 'python3 -m http.server'" mistake before we
@@ -105,6 +122,7 @@ which spawns and tracks the process.`,
 		req := proto.RunRequest{
 			Command: args[0],
 			Args:    args[1:],
+			Name:    name,
 		}
 		resp, err := proto.NewClient(sock).Run(ctx, req)
 		if err != nil {
@@ -113,6 +131,38 @@ which spawns and tracks the process.`,
 		}
 		fmt.Printf("%s  pid=%d  %s\n", resp.Job.ShortID(), resp.Job.PID, resp.Job.Name)
 	},
+}
+
+// consumeLeadingName strips an optional --name/-n flag (with either a
+// space-separated or =-joined value) from the head of args. Only the
+// FIRST token is considered, so 'godo sh -c "echo --name x"' still
+// passes --name through to the child untouched. Returns the parsed
+// name (or "") and the remaining args.
+func consumeLeadingName(args []string) (string, []string, error) {
+	if len(args) == 0 {
+		return "", args, nil
+	}
+	head := args[0]
+	switch {
+	case head == "--name" || head == "-n":
+		if len(args) < 2 {
+			return "", nil, fmt.Errorf("%s requires a value", head)
+		}
+		return args[1], args[2:], nil
+	case strings.HasPrefix(head, "--name="):
+		v := strings.TrimPrefix(head, "--name=")
+		if v == "" {
+			return "", nil, fmt.Errorf("--name= requires a value")
+		}
+		return v, args[1:], nil
+	case strings.HasPrefix(head, "-n="):
+		v := strings.TrimPrefix(head, "-n=")
+		if v == "" {
+			return "", nil, fmt.Errorf("-n= requires a value")
+		}
+		return v, args[1:], nil
+	}
+	return "", args, nil
 }
 
 func Execute() {
