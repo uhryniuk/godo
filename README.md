@@ -8,15 +8,27 @@ A small CLI for running and managing long-lived background processes — like `p
 
 **v1 feature-complete** on Linux and macOS. v2 (live job-to-job piping, remote / agent-oriented surfaces, ...) starts after a dogfooding window — see [Roadmap](#roadmap).
 
-## Build
+## Install
+
+**One-liner** (Go 1.25+ required):
+
+```sh
+go install github.com/uhryniuk/godo@latest
+```
+
+This fetches, builds, and drops `godo` into `$GOPATH/bin` (typically `~/go/bin`). Make sure that's on your `$PATH`:
+
+```sh
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+**From source:**
 
 ```sh
 git clone https://github.com/uhryniuk/godo
 cd godo
-go build -o godo .
+go install .
 ```
-
-Requires Go 1.25+. Ships a single static binary; drop it anywhere on `$PATH`.
 
 ## Quick tour
 
