@@ -103,6 +103,7 @@ func (e *attachExec) Run() error {
 		fmt.Fprintln(e.stderr, "attach:", err)
 		return err
 	}
+	fmt.Fprintln(e.stdout, ptyproxy.Banner(e.target))
 	return ptyproxy.Run(stream)
 }
 

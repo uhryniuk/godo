@@ -54,3 +54,17 @@ func flushPendingPrefix(state detachState) []byte {
 	}
 	return nil
 }
+
+// Banner returns the one-line connection notice printed before raw
+// mode is enabled. Both `godo attach` and the TUI's in-pane attach
+// emit this so users always see the detach shortcut at the moment of
+// entry. target is what the user typed (id or name).
+//
+// Style: dim ANSI escape so it sits visually below whatever the
+// child process renders. Plain ASCII fallback if the caller's terminal
+// strips escapes (the bytes are still readable).
+func Banner(target string) string {
+	const dim = "\x1b[2m"
+	const reset = "\x1b[0m"
+	return dim + "[godo] attached to " + target + " — Ctrl+B then d to detach" + reset
+}

@@ -38,6 +38,16 @@ func TestProcessInputByteTable(t *testing.T) {
 	}
 }
 
+func TestBannerIncludesTargetAndShortcut(t *testing.T) {
+	got := Banner("web")
+	if !bytes.Contains([]byte(got), []byte("web")) {
+		t.Errorf("banner missing target: %q", got)
+	}
+	if !bytes.Contains([]byte(got), []byte("Ctrl+B")) {
+		t.Errorf("banner missing detach shortcut: %q", got)
+	}
+}
+
 func TestFlushPendingPrefix(t *testing.T) {
 	if got := flushPendingPrefix(sNormal); got != nil {
 		t.Errorf("normal state: got %v, want nil", got)

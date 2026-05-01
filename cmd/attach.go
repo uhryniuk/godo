@@ -41,6 +41,7 @@ via 'godo run'. Window resizes are forwarded.`,
 			fmt.Fprintln(os.Stderr, "godo:", err)
 			os.Exit(1)
 		}
+		fmt.Println(ptyproxy.Banner(args[0]))
 		if err := ptyproxy.Run(stream); err != nil {
 			fmt.Fprintln(os.Stderr, "godo:", err)
 			os.Exit(1)
