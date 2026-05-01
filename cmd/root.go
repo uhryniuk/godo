@@ -124,12 +124,16 @@ Pass --name (or -n) before the command to label the job; afterwards
 			Args:    args[1:],
 			Name:    name,
 		}
-		resp, err := proto.NewClient(sock).Run(ctx, req)
+		client := proto.NewClient(sock)
+		resp, err := client.Run(ctx, req)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "godo:", err)
 			os.Exit(1)
 		}
 		fmt.Printf("%s  pid=%d  %s\n", resp.Job.ShortID(), resp.Job.PID, resp.Job.Name)
+		if code := reportIfFastFail(ctx, client, resp.Job.Hash, os.Stderr); code != 0 {
+			os.Exit(code)
+		}
 	},
 }
 
