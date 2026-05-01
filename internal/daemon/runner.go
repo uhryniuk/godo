@@ -31,6 +31,7 @@ type runningProc struct {
 
 	readerDone chan struct{} // closed when the PTY reader goroutine exits
 	writerDone chan struct{} // closed when the log writer goroutine exits
+	done       chan struct{} // closed at the end of watch(), after registry update — restart waits on this
 }
 
 // Runner spawns and supervises child processes. One Runner per daemon.
@@ -173,6 +174,7 @@ func (r *Runner) Start(j *job.Job) error {
 		logFile:    logFile,
 		readerDone: make(chan struct{}),
 		writerDone: make(chan struct{}),
+		done:       make(chan struct{}),
 	}
 	r.mu.Lock()
 	r.procs[hash] = rp
@@ -294,6 +296,10 @@ func (r *Runner) watch(hash string, rp *runningProc) {
 	if r.onExit != nil {
 		r.onExit(hash, exitCode, finalState)
 	}
+
+	// Closed last so any waiter (notably handleRestart's WaitExit) sees the
+	// terminal registry state once it unblocks.
+	close(rp.done)
 }
 
 // isExpectedExitErr returns true for errors that are normal in our
@@ -306,6 +312,38 @@ func isExpectedExitErr(err error) bool {
 	return errors.Is(err, io.EOF)
 }
 
+// WaitExit returns a channel that closes when hash's running proc has
+// fully exited and its watcher has recorded the terminal state, plus
+// true if there's currently a running proc to wait on. Returns
+// (nil, false) if the proc isn't in the procs map (already exited or
+// never started). Used by handleRestart to gate the respawn on actual
+// process death rather than registry-state polling.
+func (r *Runner) WaitExit(hash string) (<-chan struct{}, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rp, ok := r.procs[hash]
+	if !ok {
+		return nil, false
+	}
+	return rp.done, true
+}
+
+// Kill sends SIGKILL to the running proc's process group. No-op if not
+// running. Used as escalation when SIGTERM didn't land in time.
+// Doesn't touch registry state — Stop already set it to Cancelled.
+func (r *Runner) Kill(hash string) error {
+	r.mu.Lock()
+	rp, ok := r.procs[hash]
+	r.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	if err := syscall.Kill(-rp.cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		return fmt.Errorf("sigkill pgid %d: %w", rp.cmd.Process.Pid, err)
+	}
+	return nil
+}
+
 // Stop signals the running process for hash with SIGTERM. Sets job state
 // to Cancelled BEFORE signalling so the watcher does not clobber it with
 // Completed/Failed when the process exits.
@@ -313,8 +351,9 @@ func isExpectedExitErr(err error) bool {
 // If the job is Pending (registered but not yet started) it transitions
 // straight to Cancelled. If it has already exited, Stop is a no-op.
 //
-// SIGKILL escalation is intentionally not part of v1; if SIGTERM does not
-// land within a few seconds, the user can re-issue Stop. (TODO.md)
+// Stop returns once the signal is delivered; it does not wait for the
+// child to actually exit. Callers that need that guarantee (e.g. restart)
+// should pair Stop with WaitExit and escalate to Kill on timeout.
 func (r *Runner) Stop(hash string) error {
 	r.mu.Lock()
 	r.stoppedManually[hash] = true

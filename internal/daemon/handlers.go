@@ -147,18 +147,26 @@ func (d *Daemon) handleRestart(req proto.Request) proto.Response {
 	if err := d.runner.Stop(j.Hash); err != nil {
 		return errf("stop: %v", err)
 	}
-	// Wait for the watcher to record the terminal state. If it doesn't
-	// settle within the deadline we report and abort the restart.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		snap, err := d.registry.GetCopy(j.Hash)
-		if err != nil {
-			return errf("post-stop get: %v", err)
+	// Wait for the old proc to actually exit before respawning. Polling
+	// registry state isn't enough: Stop sets state=Cancelled synchronously
+	// before the child has died, so a state-based wait would short-circuit
+	// and we'd end up with two processes racing for the same resources
+	// (e.g. a port). Gate on the per-proc done channel instead.
+	done, isRunning := d.runner.WaitExit(j.Hash)
+	if isRunning {
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			// SIGTERM didn't land within the grace window — escalate.
+			if err := d.runner.Kill(j.Hash); err != nil {
+				return errf("escalate to SIGKILL: %v", err)
+			}
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				return errf("restart: process for %s did not exit after SIGKILL", j.Name)
+			}
 		}
-		if snap.State.IsExited() || snap.State == job.Pending {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
 	if err := d.registry.Update(j.Hash, func(j *job.Job) {
 		j.State = job.Pending

@@ -2,9 +2,11 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -217,6 +219,121 @@ func TestExplicitRestartUsesSameHash(t *testing.T) {
 	}
 	if rresp.Job.State != job.Running {
 		t.Errorf("post-restart state: got %s, want running", rresp.Job.State)
+	}
+}
+
+// pidAlive returns true if pid is still a live process. Uses kill(0) which
+// is the standard "exists?" probe — ESRCH means the process is gone.
+func pidAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	if err == nil {
+		return true
+	}
+	return !errors.Is(err, syscall.ESRCH)
+}
+
+// TestRestartOldPIDFullyExited covers the bug where restart would mark the
+// new job Running while the old PID was still alive (rogue webserver still
+// serving on its port). Restart must return only after the predecessor is
+// fully reaped.
+func TestRestartOldPIDFullyExited(t *testing.T) {
+	sock, stop := startDaemon(t)
+	defer stop()
+
+	c := proto.NewClient(sock)
+	ctx := context.Background()
+
+	resp, err := c.Run(ctx, proto.RunRequest{
+		Command: "/bin/sh",
+		Args:    []string{"-c", "sleep 30"},
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	oldPID := resp.Job.PID
+	defer func() { _, _ = c.Stop(ctx, resp.Job.Hash) }()
+
+	rresp, err := c.Restart(ctx, resp.Job.Hash)
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if rresp.Job.PID == oldPID {
+		t.Fatalf("restart did not produce a new PID")
+	}
+	// The whole point: the old PID must be dead by the time Restart
+	// returns. Allow a tiny grace because reparenting can lag a bit.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) && pidAlive(oldPID) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if pidAlive(oldPID) {
+		t.Errorf("old PID %d still alive after restart", oldPID)
+	}
+}
+
+// TestRestartEscalatesToSIGKILL covers the SIGTERM-resistant case (a
+// child that ignores SIGTERM). Restart should escalate to SIGKILL and
+// still succeed within the deadline.
+func TestRestartEscalatesToSIGKILL(t *testing.T) {
+	sock, stop := startDaemon(t)
+	defer stop()
+
+	c := proto.NewClient(sock)
+	ctx := context.Background()
+
+	// Echo READY *after* installing the trap. We wait for that line in
+	// the job log before calling Restart so the SIGTERM doesn't race with
+	// trap installation (which would let the shell die before it ignores
+	// the signal — defeating the test).
+	resp, err := c.Run(ctx, proto.RunRequest{
+		Command: "/bin/sh",
+		Args:    []string{"-c", `trap "" TERM; echo READY; while :; do sleep 1; done`},
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	oldPID := resp.Job.PID
+	// Cleanup must SIGKILL because c.Stop only sends SIGTERM and the
+	// child traps it. Without this, the daemon-shutdown wait would hang.
+	defer func() {
+		if list, err := c.List(ctx); err == nil {
+			for _, j := range list.Jobs {
+				if j.Hash == resp.Job.Hash && j.PID > 0 {
+					_ = syscall.Kill(-j.PID, syscall.SIGKILL)
+				}
+			}
+		}
+	}()
+
+	readyDeadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(readyDeadline) {
+		logs, err := c.Logs(ctx, resp.Job.Hash)
+		if err == nil && strings.Contains(logs.Output, "READY") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	start := time.Now()
+	rresp, err := c.Restart(ctx, resp.Job.Hash)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if elapsed < 2*time.Second {
+		t.Errorf("restart returned too fast (%s) — SIGTERM escalation should have engaged", elapsed)
+	}
+	if elapsed > 6*time.Second {
+		t.Errorf("restart took too long (%s)", elapsed)
+	}
+	if rresp.Job.PID == oldPID {
+		t.Fatalf("restart did not produce a new PID")
+	}
+	if pidAlive(oldPID) {
+		t.Errorf("old PID %d still alive after SIGKILL escalation", oldPID)
 	}
 }
 
