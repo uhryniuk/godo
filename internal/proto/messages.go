@@ -10,15 +10,18 @@ import (
 type Op string
 
 const (
-	OpPing       Op = "Ping"
-	OpRun        Op = "Run"
-	OpList       Op = "List"
-	OpStop       Op = "Stop"
-	OpRestart    Op = "Restart"
-	OpRemove     Op = "Remove"
-	OpLogs       Op = "Logs"       // one-shot, returns full content
-	OpLogsFollow Op = "LogsFollow" // streaming: replays then follows
-	OpAttach     Op = "Attach"     // streaming bidir: PTY proxy
+	OpPing           Op = "Ping"
+	OpRun            Op = "Run"
+	OpList           Op = "List"
+	OpStop           Op = "Stop"
+	OpRestart        Op = "Restart"
+	OpRemove         Op = "Remove"
+	OpLogs           Op = "Logs"       // one-shot, returns full content
+	OpLogsFollow     Op = "LogsFollow" // streaming: replays then follows
+	OpAttach         Op = "Attach"     // streaming bidir: PTY proxy
+	OpLoadService    Op = "LoadService"
+	OpReloadServices Op = "ReloadServices"
+	OpListServices   Op = "ListServices"
 )
 
 // Request is the envelope for every CLI->daemon RPC.
@@ -102,4 +105,36 @@ type DataFrame struct {
 type Size struct {
 	Cols uint16 `json:"cols"`
 	Rows uint16 `json:"rows"`
+}
+
+// ServiceInfo is the on-wire summary of a declarative service spec.
+// Smaller than the full Spec; just what the CLI renders.
+type ServiceInfo struct {
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	Command   string `json:"command"`
+	Autostart bool   `json:"autostart"`
+	Restart   string `json:"restart,omitempty"`
+	Cron      string `json:"cron,omitempty"`
+}
+
+// LoadServiceRequest asks the daemon to import a TOML file from Path
+// into ~/.godo/services/ and register it.
+type LoadServiceRequest struct {
+	Path string `json:"path"`
+}
+
+type LoadServiceResponse struct {
+	Service ServiceInfo `json:"service"`
+}
+
+type ReloadServicesResponse struct {
+	Added    []ServiceInfo `json:"added,omitempty"`
+	Removed  []string      `json:"removed,omitempty"`
+	Modified []ServiceInfo `json:"modified,omitempty"`
+	Errors   []string      `json:"errors,omitempty"`
+}
+
+type ListServicesResponse struct {
+	Services []ServiceInfo `json:"services"`
 }

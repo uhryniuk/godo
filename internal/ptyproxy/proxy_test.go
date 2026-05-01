@@ -13,12 +13,12 @@ import (
 
 // fakeStream is a controllable Stream for testing Run.
 type fakeStream struct {
-	mu       sync.Mutex
-	outbox   bytes.Buffer // what RunOn wrote (i.e. data the daemon would receive)
-	resizes  []resizeEvt
-	inbox    chan []byte // chunks the test wants to deliver via Read
-	closed   atomic.Bool
-	closeWG  sync.WaitGroup
+	mu      sync.Mutex
+	outbox  bytes.Buffer // what RunOn wrote (i.e. data the daemon would receive)
+	resizes []resizeEvt
+	inbox   chan []byte // chunks the test wants to deliver via Read
+	closed  atomic.Bool
+	closeWG sync.WaitGroup
 }
 
 type resizeEvt struct{ cols, rows uint16 }

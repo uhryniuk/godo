@@ -26,9 +26,11 @@ const Version = "0.0.1"
 type Daemon struct {
 	socketPath string
 	stateDir   string
+	serviceDir string
 
 	registry *Registry
 	runner   *Runner
+	svc      *services
 
 	listener net.Listener
 	wg       sync.WaitGroup
@@ -36,13 +38,17 @@ type Daemon struct {
 
 // New constructs a Daemon. The state directory is derived from the
 // socket path's parent — that's where registry.json and per-job log
-// directories live.
+// directories live. The services directory sits next to the state dir
+// (~/.godo/services) and holds declarative TOML service files.
 func New(socketPath string) *Daemon {
 	stateDir := filepath.Dir(socketPath)
+	serviceDir := filepath.Join(filepath.Dir(stateDir), "services")
 	d := &Daemon{
 		socketPath: socketPath,
 		stateDir:   stateDir,
+		serviceDir: serviceDir,
 		registry:   NewRegistry(),
+		svc:        newServices(),
 	}
 	d.runner = NewRunner(d.registry, d.Save)
 	d.runner.SetOnExit(d.onJobExit)
@@ -61,6 +67,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if err := LoadRegistry(d.stateDir, d.registry); err != nil {
 		slog.Warn("load registry on boot", "err", err)
 	}
+	d.reconcileBootedJobs()
+	d.applyServicesOnBoot()
 
 	// Remove stale socket from a prior crashed daemon. If a live daemon owns
 	// it, the Listen call below will fail and we exit cleanly.

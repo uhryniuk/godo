@@ -64,6 +64,8 @@ func Execute() {
 		rmCmd,
 		logsCmd,
 		attachCmd,
+		loadCmd,
+		reloadCmd,
 	)
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

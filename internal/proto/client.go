@@ -111,6 +111,35 @@ func (c *Client) Remove(ctx context.Context, target string) (*RemoveResponse, er
 	return &out, nil
 }
 
+// LoadService imports a TOML service file at path into the daemon's
+// services dir and registers it.
+func (c *Client) LoadService(ctx context.Context, path string) (*LoadServiceResponse, error) {
+	body, _ := json.Marshal(LoadServiceRequest{Path: path})
+	var out LoadServiceResponse
+	if err := c.callTyped(ctx, Request{Op: OpLoadService, Body: body}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ReloadServices rescans the services dir and applies changes.
+func (c *Client) ReloadServices(ctx context.Context) (*ReloadServicesResponse, error) {
+	var out ReloadServicesResponse
+	if err := c.callTyped(ctx, Request{Op: OpReloadServices}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListServices returns the daemon's current view of loaded services.
+func (c *Client) ListServices(ctx context.Context) (*ListServicesResponse, error) {
+	var out ListServicesResponse
+	if err := c.callTyped(ctx, Request{Op: OpListServices}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Logs returns the full contents of the job's combined output.log
 // (PTY-merged stdout and stderr).
 func (c *Client) Logs(ctx context.Context, target string) (*LogsResponse, error) {

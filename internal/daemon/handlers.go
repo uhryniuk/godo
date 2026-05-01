@@ -14,6 +14,7 @@ import (
 
 	"github.com/uhryniuk/godo/internal/job"
 	"github.com/uhryniuk/godo/internal/proto"
+	"github.com/uhryniuk/godo/internal/service"
 )
 
 func (d *Daemon) dispatch(req proto.Request) proto.Response {
@@ -32,9 +33,67 @@ func (d *Daemon) dispatch(req proto.Request) proto.Response {
 		return d.handleRemove(req)
 	case proto.OpLogs:
 		return d.handleLogs(req)
+	case proto.OpLoadService:
+		return d.handleLoadService(req)
+	case proto.OpReloadServices:
+		return d.handleReloadServices()
+	case proto.OpListServices:
+		return d.handleListServices()
 	default:
 		return errf("unknown op: %s", req.Op)
 	}
+}
+
+func toServiceInfo(s *service.Spec) proto.ServiceInfo {
+	return proto.ServiceInfo{
+		Name:      s.Name,
+		Path:      s.Path,
+		Command:   s.Command,
+		Autostart: s.Autostart,
+		Restart:   s.Restart,
+		Cron:      s.Cron.Schedule,
+	}
+}
+
+func (d *Daemon) handleLoadService(req proto.Request) proto.Response {
+	var body proto.LoadServiceRequest
+	if err := json.Unmarshal(req.Body, &body); err != nil {
+		return errf("decode LoadServiceRequest: %v", err)
+	}
+	if body.Path == "" {
+		return errf("path is required")
+	}
+	spec, err := d.importServiceFile(body.Path)
+	if err != nil {
+		return errf("load: %v", err)
+	}
+	return ok(proto.LoadServiceResponse{Service: toServiceInfo(spec)})
+}
+
+func (d *Daemon) handleReloadServices() proto.Response {
+	diff, errs := d.reloadServices()
+	resp := proto.ReloadServicesResponse{
+		Removed: diff.Removed,
+	}
+	for _, s := range diff.Added {
+		resp.Added = append(resp.Added, toServiceInfo(s))
+	}
+	for _, s := range diff.Modified {
+		resp.Modified = append(resp.Modified, toServiceInfo(s))
+	}
+	for _, e := range errs {
+		resp.Errors = append(resp.Errors, e.Error())
+	}
+	return ok(resp)
+}
+
+func (d *Daemon) handleListServices() proto.Response {
+	specs := d.svc.snapshot()
+	infos := make([]proto.ServiceInfo, 0, len(specs))
+	for _, s := range specs {
+		infos = append(infos, toServiceInfo(s))
+	}
+	return ok(proto.ListServicesResponse{Services: infos})
 }
 
 func (d *Daemon) resolveTarget(req proto.Request) (*job.Job, *proto.Response) {
