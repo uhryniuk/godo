@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/uhryniuk/godo/internal/buildinfo"
 	"github.com/uhryniuk/godo/internal/job"
 	"github.com/uhryniuk/godo/internal/proto"
 	"github.com/uhryniuk/godo/internal/service"
@@ -20,7 +21,11 @@ import (
 func (d *Daemon) dispatch(req proto.Request) proto.Response {
 	switch req.Op {
 	case proto.OpPing:
-		return ok(proto.PingResponse{Version: Version, PID: os.Getpid()})
+		return ok(proto.PingResponse{
+			Version:      Version,
+			BuildVersion: buildinfo.Short(),
+			PID:          os.Getpid(),
+		})
 	case proto.OpRun:
 		return d.handleRun(req)
 	case proto.OpList:

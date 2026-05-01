@@ -38,10 +38,15 @@ type Response struct {
 	Body  json.RawMessage `json:"body,omitempty"`
 }
 
-// PingResponse is the body of an OpPing reply.
+// PingResponse is the body of an OpPing reply. Version is the wire/
+// behaviour version (gates protocol compatibility); BuildVersion is
+// the git short rev the daemon binary was built from (drives the
+// upgrade-mismatch notice). BuildVersion is empty when talking to a
+// pre-upgrade-aware daemon.
 type PingResponse struct {
-	Version string `json:"version"`
-	PID     int    `json:"pid"`
+	Version      string `json:"version"`
+	BuildVersion string `json:"build_version,omitempty"`
+	PID          int    `json:"pid"`
 }
 
 // RunRequest is the body of an OpRun.

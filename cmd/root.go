@@ -9,9 +9,55 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/uhryniuk/godo/internal/autospawn"
+	"github.com/uhryniuk/godo/internal/buildinfo"
 	"github.com/uhryniuk/godo/internal/config"
 	"github.com/uhryniuk/godo/internal/proto"
 )
+
+// versionNoticeSkip lists commands whose PreRun should not print the
+// supervisor build-mismatch notice. Daemon-management commands all skip
+// (the notice would be noise: shutdown is going to bring it down anyway,
+// version/upgrade explicitly surface build info, supervisor IS the daemon).
+var versionNoticeSkip = map[string]bool{
+	"supervisor": true,
+	"daemon":     true,
+	"version":    true,
+	"upgrade":    true,
+	"shutdown":   true,
+}
+
+// warnIfBuildMismatch pings the daemon (without auto-spawning) and prints
+// a one-line dim notice on stderr if its build differs from the CLI's.
+// Silent on every other condition: daemon unreachable, either side
+// reporting "unknown", or matching builds. Always best-effort — never
+// blocks or fails the surrounding command.
+func warnIfBuildMismatch(cmdName string) {
+	if versionNoticeSkip[cmdName] {
+		return
+	}
+	cliBuild := buildinfo.Short()
+	if cliBuild == buildinfo.Unknown {
+		return
+	}
+	sock := config.GetSocketPath()
+	client := proto.NewClient(sock)
+	if !client.Reachable(200 * time.Millisecond) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	ping, err := client.Ping(ctx)
+	if err != nil || ping.BuildVersion == "" || ping.BuildVersion == buildinfo.Unknown {
+		return
+	}
+	if ping.BuildVersion == cliBuild {
+		return
+	}
+	const dim, reset = "\x1b[2m", "\x1b[0m"
+	fmt.Fprintf(os.Stderr,
+		"%sgodo: supervisor running build %s, CLI is %s — run 'godo upgrade' to refresh%s\n",
+		dim, ping.BuildVersion, cliBuild, reset)
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "godo [flags] <command> [args...]",
@@ -21,6 +67,9 @@ logout. Equivalent to 'godo run' — passes its positional args to the daemon
 which spawns and tracks the process.`,
 	DisableFlagParsing: true, // pass everything after 'godo' through to the child
 	Args:               cobra.MinimumNArgs(0),
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		warnIfBuildMismatch(cmd.Name())
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		// DisableFlagParsing means the leading --help / -h doesn't get
 		// special-cased by cobra. Catch it here so `godo --help` shows
@@ -81,6 +130,7 @@ func Execute() {
 		monitCmd,
 		runCmd,
 		shutdownCmd,
+		upgradeCmd,
 		versionCmd,
 	)
 	if err := rootCmd.Execute(); err != nil {
