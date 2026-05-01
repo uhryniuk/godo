@@ -38,8 +38,19 @@ via 'godo run'. Window resizes are forwarded.`,
 
 		seq, opts := resolveDetachOpts()
 
+		client := proto.NewClient(sock)
+
+		// Replay existing log before going live so the user sees what
+		// happened before they attached. Use a short-lived context for
+		// the one-shot RPC; the attach stream itself is unbounded.
+		replayCtx, replayCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if logs, err := client.Logs(replayCtx, args[0]); err == nil && logs.Output != "" {
+			fmt.Print(logs.Output)
+		}
+		replayCancel()
+
 		// Attach itself is unbounded — exits on detach or job end.
-		stream, err := proto.NewClient(sock).Attach(context.Background(), args[0])
+		stream, err := client.Attach(context.Background(), args[0])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "godo:", err)
 			os.Exit(1)

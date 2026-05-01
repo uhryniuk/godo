@@ -143,6 +143,13 @@ func (e *attachExec) SetStderr(w io.Writer) { e.stderr = w }
 func (e *attachExec) Run() error {
 	seq, opts := tuiResolveDetachOpts(e.stderr)
 
+	// Replay history before going live.
+	replayCtx, replayCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if logs, err := e.client.Logs(replayCtx, e.target); err == nil && logs.Output != "" {
+		fmt.Fprint(e.stdout, logs.Output)
+	}
+	replayCancel()
+
 	stream, err := e.client.Attach(context.Background(), e.target)
 	if err != nil {
 		fmt.Fprintln(e.stderr, "attach:", err)
