@@ -43,6 +43,11 @@ godo stop d2a91e0c           # SIGTERM, marks Cancelled
 godo restart d2a91e0c        # same hash, fresh PID
 godo rm d2a91e0c             # only when stopped; deletes the log dir
 
+# godo does NOT shell-tokenize: don't quote the whole command.
+#   bad:  godo "python3 -m http.server"   ← passed as one filename, exec fails
+#   good: godo python3 -m http.server     ← shell tokenizes, godo passes through
+#   good: godo sh -c "python3 -m http.server"   ← when you need shell features
+
 # For flags (--name / --restart / --nice / --env / --working-dir),
 # use the explicit form — `--` separates godo flags from the child's:
 godo run --name web --restart on-failure -- node server.js --port 8080

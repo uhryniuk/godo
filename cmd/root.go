@@ -35,6 +35,13 @@ which spawns and tracks the process.`,
 			return
 		}
 
+		// Catch the "godo 'python3 -m http.server'" mistake before we
+		// spin up the daemon and chase a doomed exec.
+		if hint := quotedCommandHint(args[0]); hint != "" {
+			fmt.Fprintln(os.Stderr, hint)
+			os.Exit(1)
+		}
+
 		config.InitConfig()
 		sock := config.GetSocketPath()
 

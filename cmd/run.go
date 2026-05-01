@@ -34,6 +34,11 @@ Use '--' to separate godo flags from the child command:
     godo run --name web --restart on-failure -- node server.js --port 8080`,
 	Args: cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		if hint := quotedCommandHint(args[0]); hint != "" {
+			fmt.Fprintln(os.Stderr, hint)
+			os.Exit(1)
+		}
+
 		config.InitConfig()
 		sock := config.GetSocketPath()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
