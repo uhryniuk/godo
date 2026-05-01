@@ -29,17 +29,45 @@ func TestClamp(t *testing.T) {
 	}
 }
 
-func TestTruncName(t *testing.T) {
-	if got := truncName("short", 32); got != "short" {
+func TestTruncRunes(t *testing.T) {
+	if got := truncRunes("short", 32); got != "short" {
 		t.Errorf("short pass-through: %q", got)
 	}
 	long := strings.Repeat("a", 50)
-	got := truncName(long, 32)
+	got := truncRunes(long, 32)
 	if n := utf8.RuneCountInString(got); n != 32 {
 		t.Errorf("truncated rune count: got %d, want 32", n)
 	}
 	if !strings.HasSuffix(got, "…") {
 		t.Errorf("truncated should end with ellipsis: %q", got)
+	}
+}
+
+func TestPadRightRuneAware(t *testing.T) {
+	// "abc…" is 4 runes / 6 bytes. Padding to 8 columns must add 4
+	// spaces, so the visible width matches.
+	got := padRight("abc…", 8)
+	if n := utf8.RuneCountInString(got); n != 8 {
+		t.Errorf("padded rune count: got %d, want 8 (%q)", n, got)
+	}
+}
+
+func TestRenderRowNameStarsWhenSameAsCommand(t *testing.T) {
+	// Default Job.Name is "<command> <args...>" which equals
+	// commandLine(j). renderRow should collapse Name to "*".
+	j := job.Job{
+		Hash:    "abcdef1234567890",
+		Name:    "/bin/sh -c sleep 30",
+		Command: "/bin/sh",
+		Args:    []string{"-c", "sleep 30"},
+		State:   job.Running,
+	}
+	row := renderRow(j, time.Now(), false)
+	if !strings.Contains(row, " *  ") {
+		t.Errorf("expected Name column to be '*' when matching CMD; row: %q", row)
+	}
+	if !strings.Contains(row, "/bin/sh -c sleep 30") {
+		t.Errorf("CMD column should still show full command; row: %q", row)
 	}
 }
 

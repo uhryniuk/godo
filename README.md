@@ -119,7 +119,7 @@ Targets accept either an exact name or a hash prefix.
 | `godo attach <id\|name>`         | Take over the job's PTY. Default detach: Ctrl+X then d ($GODO_DETACH overrides). |
 | `godo load <file.toml>`          | Import a service file into `~/.godo/services/` and register it.        |
 | `godo reload`                    | Rescan `~/.godo/services/`; new files autostart, removed files stop.   |
-| `godo monit` / `godo -i`         | Bubble Tea dashboard. j/k to move, r restart, K kill, Enter attach.    |
+| `godo monit` / `godo -i`         | Bubble Tea dashboard. j/k move, r restart, K kill, Enter attaches a running job or opens the persisted log for a non-running one (j/k/g/G/PgUp/PgDn to scroll, q back). |
 | `godo run [flags] -- <cmd>...`   | Explicit form with flags (`--name`, `--restart`, `--nice`, `--env`).   |
 | `godo upgrade`                   | Stop the running supervisor so the next CLI call spawns the new binary. Lists running jobs that will die and prompts (`--yes` / `--force`). |
 | `godo shutdown`                  | Tell the daemon to stop all children, persist state, and exit.         |

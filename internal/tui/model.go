@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -20,6 +21,15 @@ import (
 )
 
 const refreshInterval = 1 * time.Second
+
+// viewMode is the current screen — the dashboard table by default,
+// the log viewer when the user opens a non-running job's output.
+type viewMode int
+
+const (
+	modeDashboard viewMode = iota
+	modeLogs
+)
 
 // Model is the top-level Bubble Tea model.
 type Model struct {
@@ -32,6 +42,12 @@ type Model struct {
 
 	statusMsg string // transient one-line message, cleared on next refresh
 	loadErr   error
+
+	mode viewMode
+	// Log viewer state — only meaningful when mode == modeLogs.
+	logTitle  string
+	logLines  []string
+	logScroll int
 }
 
 // New constructs the model. It does NOT do any I/O — that happens in
@@ -77,6 +93,27 @@ type statusClearedMsg struct{}
 
 func clearStatusAfter(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return statusClearedMsg{} })
+}
+
+// logsLoadedMsg carries the result of a Logs RPC for the in-TUI log
+// viewer. Triggered when the user presses Enter on a non-running job.
+type logsLoadedMsg struct {
+	title string
+	body  string
+	err   error
+}
+
+func (m Model) fetchLogs(target, title string) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		resp, err := client.Logs(ctx, target)
+		if err != nil {
+			return logsLoadedMsg{title: title, err: err}
+		}
+		return logsLoadedMsg{title: title, body: resp.Output}
+	}
 }
 
 // attachExitedMsg comes back from tea.ExecProcess after the user
@@ -166,12 +203,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "detached"
 		}
 		return m, clearStatusAfter(2 * time.Second)
+
+	case logsLoadedMsg:
+		if msg.err != nil {
+			m.statusMsg = "logs: " + msg.err.Error()
+			return m, clearStatusAfter(3 * time.Second)
+		}
+		// Strip a trailing newline so the viewer doesn't render an
+		// empty bottom row for every log.
+		body := strings.TrimRight(msg.body, "\n")
+		if body == "" {
+			m.logLines = []string{"(no output)"}
+		} else {
+			m.logLines = strings.Split(body, "\n")
+		}
+		m.logTitle = msg.title
+		m.logScroll = 0
+		// Jump to the bottom — the most recent output is what failed-job
+		// users want to see first. They can scroll up with k/PgUp.
+		m.logScroll = m.maxLogScroll()
+		m.mode = modeLogs
+		return m, nil
 	}
 
 	return m, nil
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.mode == modeLogs {
+		return m.handleKeyLogs(msg)
+	}
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
@@ -195,22 +256,68 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		if j, ok := m.currentJob(); ok {
-			if j.State != job.Running {
-				m.statusMsg = "can only attach to a running job"
-				return m, clearStatusAfter(2 * time.Second)
+			if j.State == job.Running {
+				return m, tea.Exec(
+					&attachExec{client: m.client, target: j.Hash},
+					func(err error) tea.Msg { return attachExitedMsg{err: err} },
+				)
 			}
-			return m, tea.Exec(
-				&attachExec{client: m.client, target: j.Hash},
-				func(err error) tea.Msg { return attachExitedMsg{err: err} },
+			// Non-running: show the persisted log in an in-TUI viewer.
+			title := fmt.Sprintf("%s  %s  [%s]", j.ShortID(), j.Name, j.State)
+			return m, tea.Batch(
+				m.flashStatus("loading log…"),
+				m.fetchLogs(j.Hash, title),
 			)
 		}
 
 	case "?":
-		m.statusMsg = "j/k=move  r=restart  K=kill  enter=attach  q=quit"
+		m.statusMsg = "j/k=move  r=restart  K=kill  enter=attach/logs  q=quit"
 		return m, clearStatusAfter(4 * time.Second)
 	}
 
 	return m, nil
+}
+
+// handleKeyLogs is the key dispatcher for log-viewer mode. q/esc go
+// back to the dashboard; movement keys mirror vim/less conventions.
+func (m Model) handleKeyLogs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "esc", "ctrl+c":
+		m.mode = modeDashboard
+		return m, nil
+	case "j", "down":
+		m.logScroll = clamp(m.logScroll+1, 0, m.maxLogScroll())
+	case "k", "up":
+		m.logScroll = clamp(m.logScroll-1, 0, m.maxLogScroll())
+	case "ctrl+d", "pgdown", " ":
+		m.logScroll = clamp(m.logScroll+m.logViewportHeight()/2, 0, m.maxLogScroll())
+	case "ctrl+u", "pgup":
+		m.logScroll = clamp(m.logScroll-m.logViewportHeight()/2, 0, m.maxLogScroll())
+	case "g", "home":
+		m.logScroll = 0
+	case "G", "end":
+		m.logScroll = m.maxLogScroll()
+	}
+	return m, nil
+}
+
+// logViewportHeight is the number of log lines that fit between the
+// header and footer chrome.
+func (m Model) logViewportHeight() int {
+	const chrome = 4 // title + blank + footer + a margin row
+	h := m.height - chrome
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
+func (m Model) maxLogScroll() int {
+	max := len(m.logLines) - m.logViewportHeight()
+	if max < 0 {
+		return 0
+	}
+	return max
 }
 
 func (m Model) currentJob() (job.Job, bool) {
@@ -289,16 +396,58 @@ func renderRow(j job.Job, now time.Time, selected bool) string {
 	if selected {
 		prefix = "> "
 	}
-	return fmt.Sprintf("%s%-8s  %-32s  %-10s  %-7d  %-8s  %s",
-		prefix, j.ShortID(), truncName(j.Name, 32), j.State, j.PID, uptime, exit)
+
+	cmd := commandLine(j)
+	name := j.Name
+	// When --name wasn't given, Job.Name defaults to the full command
+	// line, which would just duplicate the CMD column. Collapse to "*"
+	// so the CMD column is the only place the command shows.
+	if name == cmd {
+		name = "*"
+	}
+
+	return prefix +
+		padRight(j.ShortID(), 8) + "  " +
+		padRight(truncRunes(name, 20), 20) + "  " +
+		padRight(truncRunes(cmd, 28), 28) + "  " +
+		padRight(string(j.State), 10) + "  " +
+		padRight(fmt.Sprintf("%d", j.PID), 7) + "  " +
+		padRight(uptime, 8) + "  " +
+		exit
 }
 
-func truncName(name string, max int) string {
-	runes := []rune(name)
-	if len(runes) <= max {
-		return name
+// commandLine renders Command + Args as a single string, the way a shell
+// would have invoked it. Shown in the TUI's CMD column so a user-given
+// --name doesn't hide what's actually running.
+func commandLine(j job.Job) string {
+	if len(j.Args) == 0 {
+		return j.Command
 	}
-	return string(runes[:max-1]) + "…"
+	return j.Command + " " + strings.Join(j.Args, " ")
+}
+
+// padRight pads s with spaces to exactly width display columns, using
+// rune count (not byte count, which fmt's %-Ns does — that under-pads
+// any string containing multi-byte runes like our truncation ellipsis).
+// Strings already at or above width are returned unchanged.
+func padRight(s string, width int) string {
+	n := utf8.RuneCountInString(s)
+	if n >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-n)
+}
+
+// truncRunes truncates s to at most width runes, replacing the last
+// rune with "…" when truncation occurs. The result is always exactly
+// width runes when truncation happens, so padRight gives a stable
+// column.
+func truncRunes(s string, width int) string {
+	if utf8.RuneCountInString(s) <= width {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:width-1]) + "…"
 }
 
 var (
@@ -309,10 +458,17 @@ var (
 
 // View is the Bubble Tea renderer.
 func (m Model) View() string {
+	if m.mode == modeLogs {
+		return m.viewLogs()
+	}
+	return m.viewDashboard()
+}
+
+func (m Model) viewDashboard() string {
 	var b strings.Builder
 
-	header := fmt.Sprintf("  %-8s  %-32s  %-10s  %-7s  %-8s  %s",
-		"ID", "NAME", "STATE", "PID", "UPTIME", "EXIT")
+	header := fmt.Sprintf("  %-8s  %-20s  %-28s  %-10s  %-7s  %-8s  %s",
+		"ID", "NAME", "CMD", "STATE", "PID", "UPTIME", "EXIT")
 	b.WriteString(headerStyle.Render(header))
 	b.WriteString("\n")
 
@@ -331,10 +487,41 @@ func (m Model) View() string {
 	}
 
 	b.WriteString("\n")
-	hint := "j/k move · r restart · K kill · enter attach · ? help · q quit"
+	hint := "j/k move · r restart · K kill · enter attach/logs · ? help · q quit"
 	if m.statusMsg != "" {
 		hint = m.statusMsg
 	}
+	b.WriteString(statusStyle.Render("  " + hint))
+	b.WriteString("\n")
+	return b.String()
+}
+
+// viewLogs renders the in-TUI log viewer for a non-running job.
+// Slices logLines to the viewport window starting at logScroll.
+func (m Model) viewLogs() string {
+	var b strings.Builder
+
+	b.WriteString(headerStyle.Render("  logs · " + m.logTitle))
+	b.WriteString("\n")
+
+	height := m.logViewportHeight()
+	end := m.logScroll + height
+	if end > len(m.logLines) {
+		end = len(m.logLines)
+	}
+	for i := m.logScroll; i < end; i++ {
+		b.WriteString("  ")
+		b.WriteString(m.logLines[i])
+		b.WriteString("\n")
+	}
+	// Pad so the footer sits at a stable position even when the log
+	// is shorter than the viewport.
+	for i := end - m.logScroll; i < height; i++ {
+		b.WriteString("\n")
+	}
+
+	pos := fmt.Sprintf("%d-%d/%d", m.logScroll+1, end, len(m.logLines))
+	hint := fmt.Sprintf("j/k scroll · g/G top/bottom · PgUp/PgDn page · q back · %s", pos)
 	b.WriteString(statusStyle.Render("  " + hint))
 	b.WriteString("\n")
 	return b.String()
