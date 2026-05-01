@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -33,12 +32,10 @@ func InitConfig() *CliConfig {
 		}
 	}
 
-	// Read the config file if exists, otherwise creating it
-	file, err := os.OpenFile(GetConfigFile(), os.O_RDWR|os.O_CREATE, 0644)
+	// Touch the config file so subsequent reads find it.
+	file, err := os.OpenFile(GetConfigFile(), os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		log.Fatal(err)
-	} else {
-		fmt.Println("successfully read config")
 	}
 	defer file.Close()
 
