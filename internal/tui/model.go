@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -98,13 +99,30 @@ func (e *attachExec) SetStdout(w io.Writer) { e.stdout = w }
 func (e *attachExec) SetStderr(w io.Writer) { e.stderr = w }
 
 func (e *attachExec) Run() error {
+	seq, opts := tuiResolveDetachOpts(e.stderr)
+
 	stream, err := e.client.Attach(context.Background(), e.target)
 	if err != nil {
 		fmt.Fprintln(e.stderr, "attach:", err)
 		return err
 	}
-	fmt.Fprintln(e.stdout, ptyproxy.Banner(e.target))
-	return ptyproxy.Run(stream)
+	fmt.Fprintln(e.stdout, ptyproxy.Banner(e.target, seq))
+	return ptyproxy.Run(stream, opts...)
+}
+
+// tuiResolveDetachOpts mirrors cmd.resolveDetachOpts. Lives here to
+// avoid a tui→cmd dependency.
+func tuiResolveDetachOpts(stderr io.Writer) ([]byte, []ptyproxy.Option) {
+	raw := os.Getenv("GODO_DETACH")
+	if raw == "" {
+		return ptyproxy.DefaultDetachSequence, nil
+	}
+	seq, err := ptyproxy.ParseDetachSequence(raw)
+	if err != nil {
+		fmt.Fprintf(stderr, "godo: GODO_DETACH=%q: %v; falling back to default\n", raw, err)
+		return ptyproxy.DefaultDetachSequence, nil
+	}
+	return seq, []ptyproxy.Option{ptyproxy.WithDetachSequence(seq)}
 }
 
 // Update is the Bubble Tea reducer.

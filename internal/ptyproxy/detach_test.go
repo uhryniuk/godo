@@ -2,104 +2,173 @@ package ptyproxy
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
-func TestProcessInputByteTable(t *testing.T) {
+func TestParseDetachSequence(t *testing.T) {
 	cases := []struct {
-		name        string
-		state       detachState
-		b           byte
-		wantState   detachState
-		wantForward []byte
-		wantDetach  bool
+		in      string
+		want    []byte
+		wantErr bool
 	}{
-		{"normal byte from normal", sNormal, 'a', sNormal, []byte{'a'}, false},
-		{"prefix byte from normal", sNormal, detachKey1, sSawPrefix, nil, false},
-		{"detach completes", sSawPrefix, detachKey2, sNormal, nil, true},
-		{"prefix then non-d forwards both", sSawPrefix, 'x', sNormal, []byte{detachKey1, 'x'}, false},
-		{"prefix then prefix forwards both", sSawPrefix, detachKey1, sNormal, []byte{detachKey1, detachKey1}, false},
-		{"newline normal", sNormal, '\n', sNormal, []byte{'\n'}, false},
-		{"null byte normal", sNormal, 0x00, sNormal, []byte{0x00}, false},
+		{"Ctrl+P,Ctrl+Q", []byte{0x10, 0x11}, false},
+		{"ctrl+p,ctrl+q", []byte{0x10, 0x11}, false},
+		{"Ctrl+B,d", []byte{0x02, 'd'}, false},
+		{"Ctrl+B, d", []byte{0x02, 'd'}, false}, // whitespace tolerated
+		{"a,b,c", []byte{'a', 'b', 'c'}, false},
+		{"Ctrl+A", []byte{0x01}, false},
+		{"", nil, true},
+		{",", nil, true},
+		{"Ctrl+", nil, true},
+		{"Ctrl+ab", nil, true},
+		{"Ctrl+1", nil, true}, // requires a letter
+		{"abc", nil, true},    // multi-char without Ctrl+
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			gotState, gotForward, gotDetach := processInputByte(c.state, c.b)
-			if gotState != c.wantState {
-				t.Errorf("state: got %d, want %d", gotState, c.wantState)
+		t.Run(c.in, func(t *testing.T) {
+			got, err := ParseDetachSequence(c.in)
+			if c.wantErr {
+				if err == nil {
+					t.Errorf("expected error, got %v", got)
+				}
+				return
 			}
-			if !bytes.Equal(gotForward, c.wantForward) {
-				t.Errorf("forward: got %v, want %v", gotForward, c.wantForward)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
-			if gotDetach != c.wantDetach {
-				t.Errorf("detach: got %v, want %v", gotDetach, c.wantDetach)
+			if !bytes.Equal(got, c.want) {
+				t.Errorf("got %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+func TestFormatDetachSequence(t *testing.T) {
+	cases := []struct {
+		in   []byte
+		want string
+	}{
+		{[]byte{0x10, 0x11}, "Ctrl+P then Ctrl+Q"},
+		{[]byte{0x02, 'd'}, "Ctrl+B then d"},
+		{[]byte{'q'}, "q"},
+		{[]byte{}, ""},
+		{[]byte{0x80}, "0x80"},
+	}
+	for _, c := range cases {
+		got := FormatDetachSequence(c.in)
+		if got != c.want {
+			t.Errorf("FormatDetachSequence(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestParseFormatRoundtrip(t *testing.T) {
+	for _, s := range []string{"Ctrl+P,Ctrl+Q", "Ctrl+B,d", "q"} {
+		bytes_, err := ParseDetachSequence(s)
+		if err != nil {
+			t.Fatalf("parse %q: %v", s, err)
+		}
+		formatted := FormatDetachSequence(bytes_)
+		// Roundtrip isn't byte-equal (we use " then " instead of ",")
+		// but every component should appear.
+		for _, part := range strings.Split(s, ",") {
+			part = strings.TrimSpace(part)
+			if !strings.Contains(formatted, part) {
+				t.Errorf("formatted %q missing component %q", formatted, part)
+			}
+		}
+	}
+}
+
+// matcher tests — feed bytes through a matcher and assert the
+// (forward, detach) pairs.
+
+func TestMatcherSimpleSequence(t *testing.T) {
+	m := newMatcher([]byte{0x10, 0x11}) // Ctrl+P, Ctrl+Q
+
+	// "ab" → forward both, no detach.
+	if fwd, det := m.feed('a'); !bytes.Equal(fwd, []byte{'a'}) || det {
+		t.Errorf("'a': fwd=%v det=%v", fwd, det)
+	}
+	if fwd, det := m.feed('b'); !bytes.Equal(fwd, []byte{'b'}) || det {
+		t.Errorf("'b': fwd=%v det=%v", fwd, det)
+	}
+
+	// Ctrl+P → hold, no forward, no detach yet.
+	if fwd, det := m.feed(0x10); fwd != nil || det {
+		t.Errorf("Ctrl+P: fwd=%v det=%v", fwd, det)
+	}
+
+	// Ctrl+Q → detach.
+	if fwd, det := m.feed(0x11); fwd != nil || !det {
+		t.Errorf("Ctrl+Q: fwd=%v det=%v", fwd, det)
+	}
+}
+
+func TestMatcherPartialMatchFlushedOnMismatch(t *testing.T) {
+	m := newMatcher([]byte{0x10, 0x11})
+	// Ctrl+P then 'x' → forward both bytes, no detach.
+	if fwd, det := m.feed(0x10); fwd != nil || det {
+		t.Fatalf("Ctrl+P should hold: fwd=%v det=%v", fwd, det)
+	}
+	fwd, det := m.feed('x')
+	if det {
+		t.Errorf("should not detach")
+	}
+	if !bytes.Equal(fwd, []byte{0x10, 'x'}) {
+		t.Errorf("fwd: got %v, want [0x10, 'x']", fwd)
+	}
+}
+
+func TestMatcherFlushReturnsHeld(t *testing.T) {
+	m := newMatcher([]byte{0x10, 0x11})
+	if fwd, det := m.feed(0x10); fwd != nil || det {
+		t.Fatalf("Ctrl+P: fwd=%v det=%v", fwd, det)
+	}
+	if got := m.flush(); !bytes.Equal(got, []byte{0x10}) {
+		t.Errorf("flush: got %v, want [0x10]", got)
+	}
+	// After flush, held should be empty.
+	if got := m.flush(); got != nil {
+		t.Errorf("second flush should return nil, got %v", got)
+	}
+}
+
+func TestMatcherSingleCharSequence(t *testing.T) {
+	m := newMatcher([]byte{'q'})
+	if fwd, det := m.feed('a'); !bytes.Equal(fwd, []byte{'a'}) || det {
+		t.Errorf("'a': fwd=%v det=%v", fwd, det)
+	}
+	if fwd, det := m.feed('q'); fwd != nil || !det {
+		t.Errorf("'q': fwd=%v det=%v", fwd, det)
+	}
+}
+
+func TestMatcherDefaultsWhenSeqEmpty(t *testing.T) {
+	m := newMatcher(nil)
+	// Should use DefaultDetachSequence (Ctrl+P, Ctrl+Q).
+	if _, det := m.feed(0x10); det {
+		t.Errorf("Ctrl+P should hold under default seq")
+	}
+	if _, det := m.feed(0x11); !det {
+		t.Errorf("Ctrl+P+Ctrl+Q should detach under default seq")
 	}
 }
 
 func TestBannerIncludesTargetAndShortcut(t *testing.T) {
-	got := Banner("web")
-	if !bytes.Contains([]byte(got), []byte("web")) {
+	got := Banner("web", DefaultDetachSequence)
+	if !strings.Contains(got, "web") {
 		t.Errorf("banner missing target: %q", got)
 	}
-	if !bytes.Contains([]byte(got), []byte("Ctrl+B")) {
+	if !strings.Contains(got, "Ctrl+P then Ctrl+Q") {
 		t.Errorf("banner missing detach shortcut: %q", got)
 	}
 }
 
-func TestFlushPendingPrefix(t *testing.T) {
-	if got := flushPendingPrefix(sNormal); got != nil {
-		t.Errorf("normal state: got %v, want nil", got)
-	}
-	if got := flushPendingPrefix(sSawPrefix); !bytes.Equal(got, []byte{detachKey1}) {
-		t.Errorf("prefix state: got %v, want %v", got, []byte{detachKey1})
-	}
-}
-
-// processStream walks a byte sequence through the state machine and
-// returns the cumulative forwarded bytes plus whether a detach fired.
-// Used as a higher-level smoke that exercises typical input scenarios.
-func processStream(in []byte) (forwarded []byte, detached bool) {
-	state := sNormal
-	for _, b := range in {
-		var fwd []byte
-		var det bool
-		state, fwd, det = processInputByte(state, b)
-		if det {
-			return forwarded, true
-		}
-		forwarded = append(forwarded, fwd...)
-	}
-	if pending := flushPendingPrefix(state); pending != nil {
-		forwarded = append(forwarded, pending...)
-	}
-	return forwarded, false
-}
-
-func TestProcessStreamScenarios(t *testing.T) {
-	cases := []struct {
-		name          string
-		in            []byte
-		wantForwarded []byte
-		wantDetached  bool
-	}{
-		{"plain typing", []byte("hello\n"), []byte("hello\n"), false},
-		{"detach mid-stream", append(append([]byte("hi"), detachKey1, detachKey2), []byte("more")...), []byte("hi"), true},
-		{"prefix then x then more", []byte{'a', detachKey1, 'x', 'b'}, []byte{'a', detachKey1, 'x', 'b'}, false},
-		{"trailing prefix gets flushed on EOF", []byte{'q', detachKey1}, []byte{'q', detachKey1}, false},
-		{"empty input", []byte{}, nil, false},
-		{"detach at very start", []byte{detachKey1, detachKey2, 'x'}, nil, true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			gotFwd, gotDet := processStream(c.in)
-			if gotDet != c.wantDetached {
-				t.Errorf("detached: got %v, want %v", gotDet, c.wantDetached)
-			}
-			if !bytes.Equal(gotFwd, c.wantForwarded) {
-				t.Errorf("forwarded: got %v, want %v", gotFwd, c.wantForwarded)
-			}
-		})
+func TestBannerWithCustomSequence(t *testing.T) {
+	got := Banner("svc", []byte{0x02, 'd'})
+	if !strings.Contains(got, "Ctrl+B then d") {
+		t.Errorf("banner with custom seq: %q", got)
 	}
 }

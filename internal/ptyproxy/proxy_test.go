@@ -158,8 +158,8 @@ func TestRunOnDetachExits(t *testing.T) {
 	var stdout bytes.Buffer
 	done := runOnAsync(t, stream, stdinR, &stdout)
 
-	// Send the detach sequence: Ctrl-B then 'd'.
-	if _, err := stdinW.Write([]byte{detachKey1, detachKey2}); err != nil {
+	// Send the detach sequence (default: Ctrl+P, Ctrl+Q).
+	if _, err := stdinW.Write(DefaultDetachSequence); err != nil {
 		t.Fatalf("write detach: %v", err)
 	}
 
@@ -189,11 +189,13 @@ func TestRunOnPrefixThenNonDForwardsBoth(t *testing.T) {
 	var stdout bytes.Buffer
 	done := runOnAsync(t, stream, stdinR, &stdout)
 
-	// Ctrl-B then 'x' should forward both bytes (not detach).
-	if _, err := stdinW.Write([]byte{detachKey1, 'x'}); err != nil {
+	// First byte of default seq (Ctrl+P) then a non-matching byte
+	// should forward both (no detach).
+	prefix := DefaultDetachSequence[0]
+	if _, err := stdinW.Write([]byte{prefix, 'x'}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	waitForOutbox(t, stream, string([]byte{detachKey1, 'x'}), time.Second)
+	waitForOutbox(t, stream, string([]byte{prefix, 'x'}), time.Second)
 
 	stream.Close()
 	stdinW.Close()

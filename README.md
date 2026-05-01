@@ -35,7 +35,9 @@ godo logs d2a91e0c
 godo logs -f d2a91e0c        # follow: replays + streams live; Ctrl+C to detach
 
 # Drop into the job's PTY. Type to send to its stdin; see what it prints.
-# Detach with Ctrl+B then 'd' (the job keeps running).
+# Default detach is Ctrl+P then Ctrl+Q (Docker-style — doesn't collide with
+# tmux/screen/zellij prefixes). Override with $GODO_DETACH, e.g.
+# GODO_DETACH="Ctrl+B,d" if you prefer the tmux convention.
 godo attach d2a91e0c
 
 # Stop, restart, remove.
@@ -100,7 +102,7 @@ Targets accept either an exact name or a hash prefix.
 | `godo rm <id\|name>`             | Drop a stopped job from the registry and delete its log dir.           |
 | `godo logs <id\|name>`           | Print the job's combined output.                                       |
 | `godo logs -f <id\|name>`        | Stream the log: replays existing content then forwards live writes.    |
-| `godo attach <id\|name>`         | Take over the job's PTY; type into stdin, see stdout. Ctrl+B d detaches. |
+| `godo attach <id\|name>`         | Take over the job's PTY. Default detach: Ctrl+P then Ctrl+Q ($GODO_DETACH overrides). |
 | `godo load <file.toml>`          | Import a service file into `~/.godo/services/` and register it.        |
 | `godo reload`                    | Rescan `~/.godo/services/`; new files autostart, removed files stop.   |
 | `godo monit` / `godo -i`         | Bubble Tea dashboard. j/k to move, r restart, K kill, Enter attach.    |

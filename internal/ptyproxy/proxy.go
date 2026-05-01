@@ -21,31 +21,58 @@ type Stream interface {
 	Close() error
 }
 
+// Option configures Run / RunOn behaviour.
+type Option func(*config)
+
+type config struct {
+	detachSeq []byte
+}
+
+// WithDetachSequence overrides the default detach hotkey. nil or empty
+// resets to DefaultDetachSequence.
+func WithDetachSequence(seq []byte) Option {
+	return func(c *config) {
+		if len(seq) == 0 {
+			c.detachSeq = DefaultDetachSequence
+			return
+		}
+		c.detachSeq = append([]byte(nil), seq...)
+	}
+}
+
+func resolveConfig(opts []Option) *config {
+	c := &config{detachSeq: DefaultDetachSequence}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
+}
+
 // Run takes over the calling process's stdin/stdout to proxy to and
 // from stream. It puts stdin in raw mode (if it's a tty), forwards
-// SIGWINCH events as resize frames, and watches for the Ctrl-B d
-// detach sequence. Returns nil on detach or clean stream EOF.
+// SIGWINCH events as resize frames, and watches for the configured
+// detach key sequence. Returns nil on detach or clean stream EOF.
 //
 // Caller does not need to do their own terminal cleanup — Run restores
 // state on every return path.
-func Run(stream Stream) error {
-	return RunOn(stream, os.Stdin, os.Stdout)
+func Run(stream Stream, opts ...Option) error {
+	return RunOn(stream, os.Stdin, os.Stdout, opts...)
 }
 
 // RunOn is the testable form of Run. Passes stdin/stdout explicitly so
 // tests can drive the proxy with pipes.
-func RunOn(stream Stream, stdin *os.File, stdout io.Writer) error {
+func RunOn(stream Stream, stdin *os.File, stdout io.Writer, opts ...Option) error {
+	cfg := resolveConfig(opts)
+
 	fd := int(stdin.Fd())
 	isTTY := term.IsTerminal(fd)
 
-	var restore func()
 	if isTTY {
 		oldState, err := term.MakeRaw(fd)
 		if err != nil {
 			return fmt.Errorf("raw mode: %w", err)
 		}
-		restore = func() { _ = term.Restore(fd, oldState) }
-		defer restore()
+		defer func() { _ = term.Restore(fd, oldState) }()
 
 		// Send the initial size.
 		if cols, rows, err := term.GetSize(fd); err == nil {
@@ -75,11 +102,11 @@ func RunOn(stream Stream, stdin *os.File, stdout io.Writer) error {
 		}()
 	}
 
-	// stdin -> stream (with detach state machine).
+	// stdin -> stream (with detach matcher).
 	detachCh := make(chan struct{})
 	stdinErrCh := make(chan error, 1)
 	go func() {
-		state := sNormal
+		m := newMatcher(cfg.detachSeq)
 		buf := make([]byte, 1024)
 		for {
 			n, err := stdin.Read(buf)
@@ -87,9 +114,7 @@ func RunOn(stream Stream, stdin *os.File, stdout io.Writer) error {
 				out := make([]byte, 0, n)
 				detached := false
 				for i := 0; i < n; i++ {
-					var fwd []byte
-					var det bool
-					state, fwd, det = processInputByte(state, buf[i])
+					fwd, det := m.feed(buf[i])
 					if det {
 						detached = true
 						break
@@ -108,7 +133,7 @@ func RunOn(stream Stream, stdin *os.File, stdout io.Writer) error {
 				}
 			}
 			if err != nil {
-				if pending := flushPendingPrefix(state); pending != nil {
+				if pending := m.flush(); pending != nil {
 					_, _ = stream.Write(pending)
 				}
 				stdinErrCh <- err
@@ -126,18 +151,15 @@ func RunOn(stream Stream, stdin *os.File, stdout io.Writer) error {
 
 	select {
 	case <-detachCh:
-		// User asked to detach. Tell the daemon, then return.
 		_ = stream.Close()
 		return nil
 	case err := <-streamErrCh:
-		// Daemon closed (job exit or daemon down). Stop forwarding.
 		_ = stream.Close()
 		if errors.Is(err, io.EOF) || err == nil {
 			return nil
 		}
 		return err
 	case err := <-stdinErrCh:
-		// Local stdin closed (rare in TTY mode). Treat EOF as clean.
 		_ = stream.Close()
 		if errors.Is(err, io.EOF) || err == nil {
 			return nil
