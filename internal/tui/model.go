@@ -576,7 +576,7 @@ func (m Model) viewDashboard() string {
 	}
 
 	b.WriteString("\n")
-	hint := "j/k move · r restart · p pause · K kill · d remove · enter attach/logs · q quit"
+	hint := "j/k move · r restart · p pause/resume · K kill · d remove · enter attach/logs · q quit"
 	if m.pendingDelete != "" {
 		// Surface the confirm prompt prominently. The next keypress
 		// is consumed by handleKey before the regular keymap runs.
