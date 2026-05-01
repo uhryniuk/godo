@@ -140,6 +140,13 @@ func (c *Client) ListServices(ctx context.Context) (*ListServicesResponse, error
 	return &out, nil
 }
 
+// Shutdown asks the daemon to stop all running children, save state,
+// and exit cleanly.
+func (c *Client) Shutdown(ctx context.Context) error {
+	var out ShutdownResponse
+	return c.callTyped(ctx, Request{Op: OpShutdown}, &out)
+}
+
 // Logs returns the full contents of the job's combined output.log
 // (PTY-merged stdout and stderr).
 func (c *Client) Logs(ctx context.Context, target string) (*LogsResponse, error) {

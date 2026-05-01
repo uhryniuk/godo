@@ -276,3 +276,55 @@ func TestStopBeatsCleanExit(t *testing.T) {
 
 // keep this helper in this file separate from registry_test's
 var _ = filepath.Join
+
+func TestShutdownRPCStopsDaemon(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "godo.sock")
+	d := New(sock)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- d.Run(ctx) }()
+	waitForSocket(t, sock, 2*time.Second)
+
+	c := proto.NewClient(sock)
+	if err := c.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("daemon Run: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon did not exit after Shutdown RPC")
+	}
+}
+
+func TestShutdownStopsRunningChildren(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "godo.sock")
+	d := New(sock)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- d.Run(ctx) }()
+	waitForSocket(t, sock, 2*time.Second)
+
+	c := proto.NewClient(sock)
+	if _, err := c.Run(context.Background(), proto.RunRequest{
+		Command: "/bin/sh",
+		Args:    []string{"-c", "sleep 30"},
+	}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if err := c.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("daemon did not exit after Shutdown with running child")
+	}
+}

@@ -33,8 +33,9 @@ type Daemon struct {
 	svc      *services
 	cron     *cronner
 
-	listener net.Listener
-	wg       sync.WaitGroup
+	listener   net.Listener
+	wg         sync.WaitGroup
+	shutdownCh chan struct{}
 }
 
 // New constructs a Daemon. The state directory is derived from the
@@ -50,6 +51,7 @@ func New(socketPath string) *Daemon {
 		serviceDir: serviceDir,
 		registry:   NewRegistry(),
 		svc:        newServices(),
+		shutdownCh: make(chan struct{}, 1),
 	}
 	d.runner = NewRunner(d.registry, d.Save)
 	d.runner.SetOnExit(d.onJobExit)
@@ -95,6 +97,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 			shutdownReason <- "signal:" + sig.String()
 		case <-ctx.Done():
 			shutdownReason <- "context"
+		case <-d.shutdownCh:
+			shutdownReason <- "rpc"
 		}
 		_ = l.Close()
 	}()

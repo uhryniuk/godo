@@ -6,7 +6,7 @@ A small CLI for running and managing long-lived background processes — like `p
 
 ## Status
 
-Pre-1.0, **almost there**. The CLI surface below works end-to-end on Linux and macOS. Final polish (resource flags, `--name`, etc.) is the only remaining v1 step — see [Roadmap](#roadmap).
+**v1 feature-complete** on Linux and macOS. v2 (live job-to-job piping, remote / agent-oriented surfaces, ...) starts after a dogfooding window — see [Roadmap](#roadmap).
 
 ## Build
 
@@ -43,8 +43,16 @@ godo stop d2a91e0c           # SIGTERM, marks Cancelled
 godo restart d2a91e0c        # same hash, fresh PID
 godo rm d2a91e0c             # only when stopped; deletes the log dir
 
-# Auto-restart on failure (or always):
-godo --restart on-failure ./flaky-server
+# For flags (--name / --restart / --nice / --env / --working-dir),
+# use the explicit form — `--` separates godo flags from the child's:
+godo run --name web --restart on-failure -- node server.js --port 8080
+
+# Then target by name:
+godo stop web
+godo logs -f web
+
+# Shut everything down:
+godo shutdown
 ```
 
 Targets accept either an exact name or a hash prefix.
@@ -91,6 +99,9 @@ Targets accept either an exact name or a hash prefix.
 | `godo load <file.toml>`          | Import a service file into `~/.godo/services/` and register it.        |
 | `godo reload`                    | Rescan `~/.godo/services/`; new files autostart, removed files stop.   |
 | `godo monit` / `godo -i`         | Bubble Tea dashboard. j/k to move, r restart, K kill, Enter attach.    |
+| `godo run [flags] -- <cmd>...`   | Explicit form with flags (`--name`, `--restart`, `--nice`, `--env`).   |
+| `godo shutdown`                  | Tell the daemon to stop all children, persist state, and exit.         |
+| `godo version`                   | Print the daemon version and build SHA.                                |
 | `godo daemon`                    | Run the supervisor in the foreground (debug / dev).                    |
 
 Hidden: `godo supervisor` is the double-fork target invoked by auto-spawn.
@@ -142,11 +153,13 @@ schedule = "0 3 * * *"          # 3am every day
 
 ## Roadmap
 
-Final v1 polish:
+v1 is feature-complete. Things on deck for **v2**, scoped after a dogfooding window:
 
-- **Step 10** — `--nice` and `--ionice` flags, `--name` flag for `godo run`, `godo shutdown`, `godo version`.
+- **Live job-to-job piping** — `godo pipe A B` fans A's output into B's input. The daemon's output multiplexer and input merger are already shaped for this; v2 just adds the RPC, cycle detection, and a TUI wire-view.
+- **Remote / agent-oriented surfaces** — HTTP frontend over the existing wire protocol so the TUI (or a web view, à la zellij) can connect to a daemon on another machine, plus exploration of agent-driven workflows where godo is both the runtime and the introspection surface.
+- **Ergonomic gaps** — `--quiet` / `--json` outputs for scripting, configurable detach key, real `ionice` plumbing on Linux.
 
-Beyond v1: live job-to-job piping (`godo pipe A B` fanning A's output into B's input, with the TUI showing the wire). The daemon's output multiplexer and input merger are already shaped for this; no v1 refactor is needed.
+See `TODO.md` (gitignored) for the running ledger.
 
 ## Where state lives
 

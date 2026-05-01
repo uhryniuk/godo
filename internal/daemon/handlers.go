@@ -39,9 +39,22 @@ func (d *Daemon) dispatch(req proto.Request) proto.Response {
 		return d.handleReloadServices()
 	case proto.OpListServices:
 		return d.handleListServices()
+	case proto.OpShutdown:
+		return d.handleShutdown()
 	default:
 		return errf("unknown op: %s", req.Op)
 	}
+}
+
+func (d *Daemon) handleShutdown() proto.Response {
+	// Closing the listener happens in the shutdown goroutine after it
+	// reads from shutdownCh. The current connection stays open long
+	// enough for handleConn to write our response and close cleanly.
+	select {
+	case d.shutdownCh <- struct{}{}:
+	default:
+	}
+	return ok(proto.ShutdownResponse{})
 }
 
 func toServiceInfo(s *service.Spec) proto.ServiceInfo {

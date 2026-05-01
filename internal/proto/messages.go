@@ -22,6 +22,7 @@ const (
 	OpLoadService    Op = "LoadService"
 	OpReloadServices Op = "ReloadServices"
 	OpListServices   Op = "ListServices"
+	OpShutdown       Op = "Shutdown"
 )
 
 // Request is the envelope for every CLI->daemon RPC.
@@ -138,3 +139,6 @@ type ReloadServicesResponse struct {
 type ListServicesResponse struct {
 	Services []ServiceInfo `json:"services"`
 }
+
+// ShutdownResponse is empty; the body exists for symmetry.
+type ShutdownResponse struct{}
