@@ -191,6 +191,8 @@ v1 is feature-complete. Things on deck for **v2**, scoped after a dogfooding win
 - **Live job-to-job piping** — `godo pipe A B` fans A's output into B's input. The daemon's output multiplexer and input merger are already shaped for this; v2 just adds the RPC, cycle detection, and a TUI wire-view.
 - **Remote / agent-oriented surfaces** — HTTP frontend over the existing wire protocol so the TUI (or a web view, à la zellij) can connect to a daemon on another machine, plus exploration of agent-driven workflows where godo is both the runtime and the introspection surface.
 - **Reusable command aliases** — a lightweight `godo alias <name> -- <cmd>...` that survives `godo rm` and lets you re-launch by name (today the closest equivalent is a service file).
+- **Log truncation on attach** — cap the history replayed by `godo attach` / TUI Enter to the last N lines (configurable in `config.toml`, default ~1 000). Both surfaces should share the same limit so they're consistent. The in-TUI log viewer and `godo logs` one-shot are unaffected — those always show the full file.
+- **Log rotation** — instead of a single ever-growing `output.log`, rotate at a configurable byte threshold (e.g. 50 MB default). Rotation happens in the log-writer goroutine on each write, producing numbered segments (`output.log`, `output.log.1`, `output.log.2`, …) up to a configurable keep count. `godo logs` and `logs -f` reassemble segments in order; oldest segments beyond the keep count are deleted. Config knobs: `log_max_bytes`, `log_max_files`.
 - **Ergonomic gaps** — `--quiet` and richer `--output` formats elsewhere, real `ionice` plumbing on Linux, live-upgrade that preserves running jobs across `godo upgrade`.
 
 See `TODO.md` (gitignored) for the running ledger.
