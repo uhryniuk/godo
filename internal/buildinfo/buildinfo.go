@@ -6,6 +6,7 @@ package buildinfo
 
 import (
 	"runtime/debug"
+	"strings"
 	"sync"
 )
 
@@ -16,11 +17,18 @@ var (
 	cached string
 )
 
-// Short returns the first 12 chars of the binary's vcs.revision build
-// setting, with "+dirty" appended if the working tree was modified at
-// build time. Returns "unknown" if the binary wasn't compiled with VCS
-// metadata (which happens for `go run`, some test binaries, and
-// stripped builds). Cached after first call.
+// Short returns the binary's build identity in the most specific form
+// available:
+//
+//   - Local build (go build / go install ./...): first 12 chars of
+//     vcs.revision, with "+dirty" if the tree was modified.
+//   - Remote install with a version tag (go install pkg@v1.2.3): the
+//     module version, e.g. "v1.2.3".
+//   - Remote install without a tag (go install pkg@latest): the commit
+//     hash embedded in the pseudo-version, e.g. "abcdef012345".
+//
+// Returns "unknown" when no VCS or module metadata is present (go run,
+// stripped builds, some test binaries).
 //
 // The dirty marker matters because two binaries from the same commit
 // but with different uncommitted changes are different binaries — we
@@ -32,6 +40,8 @@ func Short() string {
 		if !ok {
 			return
 		}
+
+		// Prefer the embedded VCS revision — available for local builds.
 		var rev, modified string
 		for _, s := range info.Settings {
 			switch s.Key {
@@ -41,16 +51,30 @@ func Short() string {
 				modified = s.Value
 			}
 		}
-		if rev == "" {
+		if rev != "" {
+			if len(rev) > 12 {
+				rev = rev[:12]
+			}
+			if modified == "true" {
+				rev += "+dirty"
+			}
+			cached = rev
 			return
 		}
-		if len(rev) > 12 {
-			rev = rev[:12]
+
+		// Fall back to the module version set by the Go toolchain when
+		// installing from a module proxy (go install pkg@version).
+		// A pseudo-version (vX.Y.Z-yyyymmddhhmmss-<hash>) encodes the
+		// commit hash in the last 12-char segment; a real tag is used as-is.
+		if v := info.Main.Version; v != "" && v != "(devel)" {
+			parts := strings.Split(v, "-")
+			if len(parts) == 3 {
+				// pseudo-version: last segment is the commit hash
+				cached = parts[2]
+			} else {
+				cached = v
+			}
 		}
-		if modified == "true" {
-			rev += "+dirty"
-		}
-		cached = rev
 	})
 	return cached
 }
