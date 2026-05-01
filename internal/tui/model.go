@@ -48,6 +48,11 @@ type Model struct {
 	logTitle  string
 	logLines  []string
 	logScroll int
+
+	// pendingDelete holds the hash of a job awaiting y/N confirmation
+	// for removal. Empty when no prompt is active. The status bar
+	// renders the prompt; the next keypress resolves it.
+	pendingDelete string
 }
 
 // New constructs the model. It does NOT do any I/O — that happens in
@@ -233,6 +238,21 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeLogs {
 		return m.handleKeyLogs(msg)
 	}
+	// A pending delete-confirm consumes the next keypress: y/Y commits,
+	// anything else cancels. Handled before the regular keymap so 'd'
+	// twice in a row asks then commits, not asks then re-prompts.
+	if m.pendingDelete != "" {
+		hash := m.pendingDelete
+		m.pendingDelete = ""
+		switch msg.String() {
+		case "y", "Y":
+			return m, m.remove(hash)
+		default:
+			m.statusMsg = "remove cancelled"
+			return m, clearStatusAfter(2 * time.Second)
+		}
+	}
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
@@ -254,6 +274,27 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if j, ok := m.currentJob(); ok {
 			return m, m.stop(j.Hash)
 		}
+	case "p":
+		if j, ok := m.currentJob(); ok {
+			switch j.State {
+			case job.Running:
+				return m, m.pause(j.Hash)
+			case job.Paused:
+				return m, m.resume(j.Hash)
+			default:
+				m.statusMsg = "can only pause/resume a running or paused job"
+				return m, clearStatusAfter(2 * time.Second)
+			}
+		}
+	case "d":
+		if j, ok := m.currentJob(); ok {
+			if j.State == job.Running || j.State == job.Paused {
+				m.statusMsg = "stop the job first (K), then d to remove"
+				return m, clearStatusAfter(3 * time.Second)
+			}
+			m.pendingDelete = j.Hash
+			return m, nil
+		}
 	case "enter":
 		if j, ok := m.currentJob(); ok {
 			if j.State == job.Running {
@@ -271,7 +312,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "?":
-		m.statusMsg = "j/k=move  r=restart  K=kill  enter=attach/logs  q=quit"
+		m.statusMsg = "j/k=move  r=restart  p=pause/resume  K=kill  d=remove  enter=attach/logs  q=quit"
 		return m, clearStatusAfter(4 * time.Second)
 	}
 
@@ -351,6 +392,54 @@ func (m Model) stop(hash string) tea.Cmd {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if _, err := client.Stop(ctx, hash); err != nil {
+				return jobsLoadedMsg{err: err}
+			}
+			return nil
+		},
+		m.fetchJobs(),
+	)
+}
+
+func (m Model) pause(hash string) tea.Cmd {
+	client := m.client
+	return tea.Batch(
+		m.flashStatus("pausing…"),
+		func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, err := client.Pause(ctx, hash); err != nil {
+				return jobsLoadedMsg{err: err}
+			}
+			return nil
+		},
+		m.fetchJobs(),
+	)
+}
+
+func (m Model) resume(hash string) tea.Cmd {
+	client := m.client
+	return tea.Batch(
+		m.flashStatus("resuming…"),
+		func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, err := client.Resume(ctx, hash); err != nil {
+				return jobsLoadedMsg{err: err}
+			}
+			return nil
+		},
+		m.fetchJobs(),
+	)
+}
+
+func (m Model) remove(hash string) tea.Cmd {
+	client := m.client
+	return tea.Batch(
+		m.flashStatus("removing…"),
+		func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, err := client.Remove(ctx, hash); err != nil {
 				return jobsLoadedMsg{err: err}
 			}
 			return nil
@@ -487,8 +576,19 @@ func (m Model) viewDashboard() string {
 	}
 
 	b.WriteString("\n")
-	hint := "j/k move · r restart · K kill · enter attach/logs · ? help · q quit"
-	if m.statusMsg != "" {
+	hint := "j/k move · r restart · p pause · K kill · d remove · enter attach/logs · q quit"
+	if m.pendingDelete != "" {
+		// Surface the confirm prompt prominently. The next keypress
+		// is consumed by handleKey before the regular keymap runs.
+		name := "job"
+		for _, j := range m.jobs {
+			if j.Hash == m.pendingDelete {
+				name = j.Name
+				break
+			}
+		}
+		hint = fmt.Sprintf("Remove %s? [y/N]", name)
+	} else if m.statusMsg != "" {
 		hint = m.statusMsg
 	}
 	b.WriteString(statusStyle.Render("  " + hint))

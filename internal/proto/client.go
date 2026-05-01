@@ -111,6 +111,27 @@ func (c *Client) Remove(ctx context.Context, target string) (*RemoveResponse, er
 	return &out, nil
 }
 
+// Pause sends SIGSTOP to the running job's process group, freezing it
+// without ending the process. The PTY, ports, and memory remain held.
+func (c *Client) Pause(ctx context.Context, target string) (*PauseResponse, error) {
+	body, _ := json.Marshal(TargetRequest{Target: target})
+	var out PauseResponse
+	if err := c.callTyped(ctx, Request{Op: OpPause, Body: body}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Resume sends SIGCONT to a paused job, returning it to running state.
+func (c *Client) Resume(ctx context.Context, target string) (*ResumeResponse, error) {
+	body, _ := json.Marshal(TargetRequest{Target: target})
+	var out ResumeResponse
+	if err := c.callTyped(ctx, Request{Op: OpResume, Body: body}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // LoadService imports a TOML service file at path into the daemon's
 // services dir and registers it.
 func (c *Client) LoadService(ctx context.Context, path string) (*LoadServiceResponse, error) {

@@ -354,6 +354,10 @@ func (r *Runner) Kill(hash string) error {
 // Stop returns once the signal is delivered; it does not wait for the
 // child to actually exit. Callers that need that guarantee (e.g. restart)
 // should pair Stop with WaitExit and escalate to Kill on timeout.
+//
+// Paused jobs get an unconditional SIGCONT before SIGTERM — a SIGSTOP'd
+// process queues SIGTERM until it's continued, so without this Stop
+// would silently hang on every paused child.
 func (r *Runner) Stop(hash string) error {
 	r.mu.Lock()
 	r.stoppedManually[hash] = true
@@ -369,19 +373,77 @@ func (r *Runner) Stop(hash string) error {
 	}
 
 	if err := r.registry.Update(hash, func(j *job.Job) {
-		if j.State == job.Running {
+		if j.State == job.Running || j.State == job.Paused {
 			j.State = job.Cancelled
 		}
 	}); err != nil {
 		return err
 	}
 
-	// Negative pid = process group, because pty.Start sets Setsid. Hits
-	// the child AND any grandchildren it forked.
+	// SIGCONT first so SIGTERM lands on a paused child (a SIGSTOP'd
+	// process queues other signals until continued). Harmless on a
+	// non-paused child.
+	_ = syscall.Kill(-rp.cmd.Process.Pid, syscall.SIGCONT)
 	if err := syscall.Kill(-rp.cmd.Process.Pid, syscall.SIGTERM); err != nil {
 		return fmt.Errorf("sigterm pgid %d: %w", rp.cmd.Process.Pid, err)
 	}
 	return nil
+}
+
+// Pause sends SIGSTOP to the running proc's process group and flips its
+// registry state to Paused. Idempotent on already-paused jobs.
+// Returns ErrNotFound if the job isn't currently running, or an error
+// if the state transition isn't legal.
+func (r *Runner) Pause(hash string) error {
+	r.mu.Lock()
+	rp, ok := r.procs[hash]
+	r.mu.Unlock()
+	if !ok {
+		return ErrNotFound
+	}
+	snap, err := r.registry.GetCopy(hash)
+	if err != nil {
+		return err
+	}
+	if snap.State == job.Paused {
+		return nil
+	}
+	if snap.State != job.Running {
+		return fmt.Errorf("cannot pause job in state %s", snap.State)
+	}
+	if err := syscall.Kill(-rp.cmd.Process.Pid, syscall.SIGSTOP); err != nil {
+		return fmt.Errorf("sigstop pgid %d: %w", rp.cmd.Process.Pid, err)
+	}
+	return r.registry.Update(hash, func(j *job.Job) {
+		j.State = job.Paused
+	})
+}
+
+// Resume sends SIGCONT to a paused proc's process group and flips its
+// registry state back to Running. Idempotent on already-running jobs.
+func (r *Runner) Resume(hash string) error {
+	r.mu.Lock()
+	rp, ok := r.procs[hash]
+	r.mu.Unlock()
+	if !ok {
+		return ErrNotFound
+	}
+	snap, err := r.registry.GetCopy(hash)
+	if err != nil {
+		return err
+	}
+	if snap.State == job.Running {
+		return nil
+	}
+	if snap.State != job.Paused {
+		return fmt.Errorf("cannot resume job in state %s", snap.State)
+	}
+	if err := syscall.Kill(-rp.cmd.Process.Pid, syscall.SIGCONT); err != nil {
+		return fmt.Errorf("sigcont pgid %d: %w", rp.cmd.Process.Pid, err)
+	}
+	return r.registry.Update(hash, func(j *job.Job) {
+		j.State = job.Running
+	})
 }
 
 // SetOnExit installs a callback that fires after the watch goroutine has

@@ -22,6 +22,7 @@ type State string
 const (
 	Pending   State = "pending"
 	Running   State = "running"
+	Paused    State = "paused"
 	Completed State = "completed"
 	Failed    State = "failed"
 	Cancelled State = "cancelled"
@@ -31,14 +32,17 @@ const (
 // the lifecycle.
 //
 //	Pending                       -> Running, Cancelled
-//	Running                       -> Completed, Failed, Cancelled
+//	Running                       -> Paused, Completed, Failed, Cancelled
+//	Paused                        -> Running, Cancelled
 //	Completed, Failed, Cancelled  -> Pending  (restart, manual or by policy)
 func (s State) CanTransition(next State) bool {
 	switch s {
 	case Pending:
 		return next == Running || next == Cancelled
 	case Running:
-		return next == Completed || next == Failed || next == Cancelled
+		return next == Paused || next == Completed || next == Failed || next == Cancelled
+	case Paused:
+		return next == Running || next == Cancelled
 	case Completed, Failed, Cancelled:
 		return next == Pending
 	}
@@ -48,6 +52,7 @@ func (s State) CanTransition(next State) bool {
 // IsExited reports whether s is one of the post-execution states. The
 // reaper consults this to decide whether the restart policy should fire.
 // Cancelled counts as exited but is never auto-restarted (user intent).
+// Paused is NOT exited — the process is alive, just frozen.
 func (s State) IsExited() bool {
 	return s == Completed || s == Failed || s == Cancelled
 }

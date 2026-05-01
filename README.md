@@ -111,15 +111,16 @@ Targets accept either an exact name or a hash prefix.
 | -------------------------------- | ---------------------------------------------------------------------- |
 | `godo [--name X] <cmd> [args...]` | Run `<cmd>` as a supervised job. `--name`/`-n` (before the command) labels the job for `stop`/`rm`/etc. Auto-spawns the daemon. |
 | `godo list [-o table\|json]` / `godo ps` | Print all jobs as a table (default) or full JSON records.       |
-| `godo stop <id\|name>`           | SIGTERM the job's process group; sets `cancelled`.                     |
+| `godo stop <id\|name>`           | SIGTERM the job's process group; sets `cancelled`. Sends SIGCONT first so paused jobs unfreeze and receive the signal. |
 | `godo restart <id\|name>`        | Stop, wait for actual exit (escalating to SIGKILL after a grace window), then start again with the same spec and hash. |
+| `godo pause <id\|name>` / `godo resume <id\|name>` | Freeze a running job (SIGSTOP) / continue a paused one (SIGCONT). The process holds its memory, fds, and ports while paused — handy for "let me check something" without losing state. |
 | `godo rm <id\|name>`             | Drop a stopped job from the registry and delete its log dir.           |
 | `godo logs <id\|name>`           | Print the job's combined output.                                       |
 | `godo logs -f <id\|name>`        | Stream the log: replays existing content then forwards live writes.    |
 | `godo attach <id\|name>`         | Take over the job's PTY. Default detach: Ctrl+X then d ($GODO_DETACH overrides). |
 | `godo load <file.toml>`          | Import a service file into `~/.godo/services/` and register it.        |
 | `godo reload`                    | Rescan `~/.godo/services/`; new files autostart, removed files stop.   |
-| `godo monit` / `godo -i`         | Bubble Tea dashboard. j/k move, r restart, K kill, Enter attaches a running job or opens the persisted log for a non-running one (j/k/g/G/PgUp/PgDn to scroll, q back). |
+| `godo monit` / `godo -i`         | Bubble Tea dashboard. j/k move, r restart, p pause/resume, K kill, d remove (confirm with y), Enter attaches a running job or opens the persisted log for a non-running one (j/k/g/G/PgUp/PgDn to scroll, q back). |
 | `godo run [flags] -- <cmd>...`   | Explicit form with flags (`--name`, `--restart`, `--nice`, `--env`).   |
 | `godo upgrade`                   | Stop the running supervisor so the next CLI call spawns the new binary. Lists running jobs that will die and prompts (`--yes` / `--force`). |
 | `godo shutdown`                  | Tell the daemon to stop all children, persist state, and exit.         |

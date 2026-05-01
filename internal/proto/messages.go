@@ -16,6 +16,8 @@ const (
 	OpStop           Op = "Stop"
 	OpRestart        Op = "Restart"
 	OpRemove         Op = "Remove"
+	OpPause          Op = "Pause"
+	OpResume         Op = "Resume"
 	OpLogs           Op = "Logs"       // one-shot, returns full content
 	OpLogsFollow     Op = "LogsFollow" // streaming: replays then follows
 	OpAttach         Op = "Attach"     // streaming bidir: PTY proxy
@@ -88,6 +90,16 @@ type RestartResponse struct {
 
 type RemoveResponse struct {
 	ID string `json:"id"`
+}
+
+// PauseResponse / ResumeResponse carry the affected job snapshot so the
+// CLI can render the post-transition state in one round-trip.
+type PauseResponse struct {
+	Job job.Job `json:"job"`
+}
+
+type ResumeResponse struct {
+	Job job.Job `json:"job"`
 }
 
 // LogsResponse carries the contents of a job's combined output.log.

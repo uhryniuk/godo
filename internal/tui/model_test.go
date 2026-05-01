@@ -6,8 +6,17 @@ import (
 	"time"
 	"unicode/utf8"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/uhryniuk/godo/internal/job"
 )
+
+// keyMsg constructs a tea.KeyMsg whose String() returns s. Supports
+// single-rune inputs (e.g. "d", "y", "n") used in the dashboard
+// keymap. For multi-character names like "enter", construct directly.
+func keyMsg(s string) tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+}
 
 // Most of the TUI is rendering and Bubble Tea wiring (we don't test
 // either by policy). The pure parts worth pinning are clamp() and the
@@ -101,6 +110,61 @@ func TestRenderRowExitDashedForRunning(t *testing.T) {
 	// dash. Tabwriter could include "0" so check for the trailing "-".
 	if !strings.HasSuffix(strings.TrimRight(row, " \n"), "-") {
 		t.Errorf("running job exit should be -, got %q", row)
+	}
+}
+
+// TestDeleteConfirmFlow exercises the d → y/N flow in handleKey
+// without spinning up Bubble Tea. Asserts that the first 'd' arms a
+// pending confirm, and that 'n' (or any non-y) cancels it.
+func TestDeleteConfirmFlow(t *testing.T) {
+	m := Model{
+		jobs: []job.Job{{
+			Hash:  "abcdef1234567890",
+			Name:  "victim",
+			State: job.Failed,
+		}},
+		selected: 0,
+		mode:     modeDashboard,
+	}
+
+	updated, _ := m.handleKey(keyMsg("d"))
+	mm := updated.(Model)
+	if mm.pendingDelete == "" {
+		t.Fatal("d should arm pendingDelete on a non-running job")
+	}
+	if mm.pendingDelete != "abcdef1234567890" {
+		t.Errorf("pendingDelete = %q, want full hash", mm.pendingDelete)
+	}
+
+	// 'n' (anything but y/Y) cancels. Pending should be cleared.
+	updated, _ = mm.handleKey(keyMsg("n"))
+	mm = updated.(Model)
+	if mm.pendingDelete != "" {
+		t.Errorf("pendingDelete should be cleared after non-y, got %q", mm.pendingDelete)
+	}
+	if !strings.Contains(mm.statusMsg, "cancel") {
+		t.Errorf("expected cancel status, got %q", mm.statusMsg)
+	}
+}
+
+// TestDeleteRefusesRunning verifies the strict policy (matches CLI).
+func TestDeleteRefusesRunning(t *testing.T) {
+	m := Model{
+		jobs: []job.Job{{
+			Hash:  "abcdef1234567890",
+			Name:  "live",
+			State: job.Running,
+		}},
+		selected: 0,
+		mode:     modeDashboard,
+	}
+	updated, _ := m.handleKey(keyMsg("d"))
+	mm := updated.(Model)
+	if mm.pendingDelete != "" {
+		t.Error("d on a running job should not arm pendingDelete")
+	}
+	if !strings.Contains(mm.statusMsg, "stop") {
+		t.Errorf("expected hint mentioning 'stop', got %q", mm.statusMsg)
 	}
 }
 

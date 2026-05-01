@@ -36,6 +36,10 @@ func (d *Daemon) dispatch(req proto.Request) proto.Response {
 		return d.handleRestart(req)
 	case proto.OpRemove:
 		return d.handleRemove(req)
+	case proto.OpPause:
+		return d.handlePause(req)
+	case proto.OpResume:
+		return d.handleResume(req)
 	case proto.OpLogs:
 		return d.handleLogs(req)
 	case proto.OpLoadService:
@@ -187,6 +191,30 @@ func (d *Daemon) handleRestart(req proto.Request) proto.Response {
 	}
 	snap, _ = d.registry.GetCopy(j.Hash)
 	return ok(proto.RestartResponse{Job: snap})
+}
+
+func (d *Daemon) handlePause(req proto.Request) proto.Response {
+	j, errResp := d.resolveTarget(req)
+	if errResp != nil {
+		return *errResp
+	}
+	if err := d.runner.Pause(j.Hash); err != nil {
+		return errf("pause: %v", err)
+	}
+	snap, _ := d.registry.GetCopy(j.Hash)
+	return ok(proto.PauseResponse{Job: snap})
+}
+
+func (d *Daemon) handleResume(req proto.Request) proto.Response {
+	j, errResp := d.resolveTarget(req)
+	if errResp != nil {
+		return *errResp
+	}
+	if err := d.runner.Resume(j.Hash); err != nil {
+		return errf("resume: %v", err)
+	}
+	snap, _ := d.registry.GetCopy(j.Hash)
+	return ok(proto.ResumeResponse{Job: snap})
 }
 
 func (d *Daemon) handleRemove(req proto.Request) proto.Response {

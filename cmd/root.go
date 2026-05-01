@@ -176,6 +176,8 @@ func Execute() {
 		listCmd,
 		stopCmd,
 		restartCmd,
+		pauseCmd,
+		resumeCmd,
 		rmCmd,
 		logsCmd,
 		attachCmd,

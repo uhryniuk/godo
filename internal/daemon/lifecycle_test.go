@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -336,6 +337,92 @@ func TestRestartEscalatesToSIGKILL(t *testing.T) {
 		t.Errorf("old PID %d still alive after SIGKILL escalation", oldPID)
 	}
 }
+
+// TestPauseResumeRoundTrip exercises SIGSTOP/SIGCONT over the wire.
+// A paused process can be detected via /proc/<pid>/status: state line
+// shows "T (stopped)" while paused and "S (sleeping)" or "R (running)"
+// after resume.
+func TestPauseResumeRoundTrip(t *testing.T) {
+	sock, stop := startDaemon(t)
+	defer stop()
+
+	c := proto.NewClient(sock)
+	ctx := context.Background()
+
+	resp, err := c.Run(ctx, proto.RunRequest{
+		Command: "/bin/sh",
+		Args:    []string{"-c", "while :; do :; done"}, // CPU-busy so /proc state is stable
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	defer func() { _, _ = c.Stop(ctx, resp.Job.Hash) }()
+	pid := resp.Job.PID
+
+	if _, err := c.Pause(ctx, resp.Job.Hash); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	got := waitForJobState(t, c, resp.Job.Hash, job.Paused, 2*time.Second)
+	if got.PID != pid {
+		t.Errorf("PID changed across pause: %d vs %d", got.PID, pid)
+	}
+	if !procIsStopped(t, pid) {
+		t.Errorf("pid %d should be in T (stopped) state after pause", pid)
+	}
+
+	if _, err := c.Resume(ctx, resp.Job.Hash); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	waitForJobState(t, c, resp.Job.Hash, job.Running, 2*time.Second)
+	if procIsStopped(t, pid) {
+		t.Errorf("pid %d should not be stopped after resume", pid)
+	}
+}
+
+// TestStopWorksOnPaused verifies SIGCONT-before-SIGTERM in Stop:
+// without it, SIGTERM would queue behind SIGSTOP and the child would
+// outlive the request.
+func TestStopWorksOnPaused(t *testing.T) {
+	sock, stop := startDaemon(t)
+	defer stop()
+
+	c := proto.NewClient(sock)
+	ctx := context.Background()
+
+	resp, err := c.Run(ctx, proto.RunRequest{
+		Command: "/bin/sh",
+		Args:    []string{"-c", "sleep 60"},
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if _, err := c.Pause(ctx, resp.Job.Hash); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	waitForJobState(t, c, resp.Job.Hash, job.Paused, 2*time.Second)
+	if _, err := c.Stop(ctx, resp.Job.Hash); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	waitForJobState(t, c, resp.Job.Hash, job.Cancelled, 3*time.Second)
+}
+
+// procIsStopped reads /proc/<pid>/status and returns true if the state
+// line indicates the process is SIGSTOP'd (T = traced/stopped).
+func procIsStopped(t *testing.T, pid int) bool {
+	t.Helper()
+	body, err := os.ReadFile("/proc/" + itoa(pid) + "/status")
+	if err != nil {
+		t.Fatalf("read /proc/%d/status: %v", pid, err)
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.HasPrefix(line, "State:") {
+			return strings.Contains(line, "T (stopped)") || strings.Contains(line, "t (tracing")
+		}
+	}
+	return false
+}
+
+func itoa(n int) string { return fmt.Sprintf("%d", n) }
 
 func TestLogsReturnsCombinedOutput(t *testing.T) {
 	sock, stop := startDaemon(t)
