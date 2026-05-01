@@ -31,6 +31,7 @@ type Daemon struct {
 	registry *Registry
 	runner   *Runner
 	svc      *services
+	cron     *cronner
 
 	listener net.Listener
 	wg       sync.WaitGroup
@@ -52,6 +53,7 @@ func New(socketPath string) *Daemon {
 	}
 	d.runner = NewRunner(d.registry, d.Save)
 	d.runner.SetOnExit(d.onJobExit)
+	d.cron = newCronner(d.spawnCronJob)
 	return d
 }
 
@@ -69,6 +71,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	d.reconcileBootedJobs()
 	d.applyServicesOnBoot()
+	d.cron.Start()
 
 	// Remove stale socket from a prior crashed daemon. If a live daemon owns
 	// it, the Listen call below will fail and we exit cleanly.
@@ -113,6 +116,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 
 	d.wg.Wait()
+	// Stop cron BEFORE StopAll so a tick can't spawn a new child after
+	// we've signalled the running ones.
+	d.cron.Stop()
 	// Halt every supervised child and wait for their watchers to finish
 	// so no goroutine writes to the registry after we save it below.
 	d.runner.StopAll()

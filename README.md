@@ -6,7 +6,7 @@ A small CLI for running and managing long-lived background processes — like `p
 
 ## Status
 
-Pre-1.0, **in progress**. The CLI surface below works end-to-end on Linux and macOS. Cron and the TUI are not in yet — see [Roadmap](#roadmap).
+Pre-1.0, **in progress**. The CLI surface below works end-to-end on Linux and macOS. The TUI is not in yet — see [Roadmap](#roadmap).
 
 ## Build
 
@@ -111,8 +111,9 @@ nice        = 5                 # POSIX priority
 [env]
 PORT = "8080"
 
-[cron]                          # optional; not yet enforced (Step 8)
-schedule = "0 4 * * *"
+[cron]                          # optional
+schedule = "0 4 * * *"          # 5-field cron OR @hourly / @daily / @every 5m
+overlap  = false                # default: skip a tick if a prior run is still active
 ```
 
 `godo load /path/to/file.toml` imports a file from anywhere into the services dir (the destination basename is derived from `name`, so source paths from temp dirs / version control are normalized cleanly). `godo reload` rescans the dir and applies the diff:
@@ -123,11 +124,25 @@ schedule = "0 4 * * *"
 
 Service identity is the file path. A given file always maps to the same registry entry across daemon restarts, so log dirs and short hashes stay stable.
 
+## Cron
+
+Service files can declare a schedule and the daemon's internal scheduler fires the command on each tick. Each fire creates a fresh registry entry named `<service>@<unix-second>` so multiple runs don't collide. By default `overlap = false` suppresses a new tick if the previous instance is still running — bump to `true` for fan-out workloads.
+
+```toml
+# ~/.godo/services/cleanup.toml
+name    = "cleanup"
+command = "/usr/local/bin/prune-old-logs"
+
+[cron]
+schedule = "0 3 * * *"          # 3am every day
+```
+
+`@every 30s`, `@hourly`, and `@daily` work too.
+
 ## Roadmap
 
 These steps are designed but not shipped:
 
-- **Step 8** — Internal cron scheduler. `[cron] schedule = "0 4 * * *"` is parsed and validated today; Step 8 wires it to actually fire.
 - **Step 9** — `godo monit` / `godo -i`: Bubble Tea TUI dashboard with sortable rows, hotkeys for restart/kill/log-tail, and in-pane PTY attach.
 - **Step 10** — `--nice` and `--ionice` flags, `--name` flag for `godo run`, `godo shutdown`, `godo version`.
 

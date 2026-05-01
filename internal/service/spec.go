@@ -114,8 +114,13 @@ func (s *Spec) Validate() error {
 		}
 	}
 	if s.Cron.Schedule != "" {
+		// Permissive: standard 5-field cron + @descriptors (@hourly,
+		// @daily, @every 5m, ...). Same parser the daemon uses at runtime
+		// so anything that loads is guaranteed to schedule.
 		parser := robfigcron.NewParser(
-			robfigcron.Minute | robfigcron.Hour | robfigcron.Dom | robfigcron.Month | robfigcron.Dow,
+			robfigcron.SecondOptional | robfigcron.Minute | robfigcron.Hour |
+				robfigcron.Dom | robfigcron.Month | robfigcron.Dow |
+				robfigcron.Descriptor,
 		)
 		if _, err := parser.Parse(s.Cron.Schedule); err != nil {
 			return fmt.Errorf("cron schedule %q: %w", s.Cron.Schedule, err)

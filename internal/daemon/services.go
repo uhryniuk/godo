@@ -74,13 +74,17 @@ func (d *Daemon) reconcileBootedJobs() {
 	}
 }
 
-// applyServicesOnBoot loads every spec on disk and autostarts those
-// flagged. Idempotent: a job for the same ServiceFile is reused so
-// service identity stays stable across daemon restarts.
+// applyServicesOnBoot loads every spec on disk, registers any cron
+// schedules, and autostarts services flagged. Idempotent: a job for the
+// same ServiceFile is reused so service identity stays stable across
+// daemon restarts.
 func (d *Daemon) applyServicesOnBoot() {
 	specs := d.loadServicesOnBoot()
 	for _, s := range specs {
 		d.svc.put(s)
+		if err := d.cron.Register(s); err != nil {
+			slog.Warn("cron register failed", "service", s.Name, "err", err)
+		}
 		if !s.Autostart {
 			continue
 		}
@@ -171,6 +175,9 @@ func (d *Daemon) reloadServices() (service.Diff, []error) {
 
 	for _, spec := range diff.Added {
 		d.svc.put(spec)
+		if err := d.cron.Register(spec); err != nil {
+			errs = append(errs, fmt.Errorf("cron %s: %w", spec.Name, err))
+		}
 		if spec.Autostart {
 			if err := d.startServiceJob(spec); err != nil {
 				errs = append(errs, fmt.Errorf("start %s: %w", spec.Name, err))
@@ -178,13 +185,20 @@ func (d *Daemon) reloadServices() (service.Diff, []error) {
 		}
 	}
 	for _, path := range diff.Removed {
+		d.cron.Unregister(path)
 		d.stopServiceJob(path)
 		d.svc.remove(path)
 	}
 	for _, spec := range diff.Modified {
 		d.svc.put(spec)
-		// Intentionally don't auto-restart — user runs `godo restart` if
-		// they want the new spec to take effect.
+		// Cron entries are re-registered (Register removes the prior one
+		// internally) so a changed schedule takes effect immediately.
+		if err := d.cron.Register(spec); err != nil {
+			errs = append(errs, fmt.Errorf("cron %s: %w", spec.Name, err))
+		}
+		// Intentionally don't auto-restart the running job — user runs
+		// `godo restart` if they want command/args/env changes to take
+		// effect immediately.
 	}
 	return diff, errs
 }
@@ -236,6 +250,9 @@ func (d *Daemon) importServiceFile(srcPath string) (*service.Spec, error) {
 		return nil, err
 	}
 	d.svc.put(loaded)
+	if err := d.cron.Register(loaded); err != nil {
+		return loaded, fmt.Errorf("cron register: %w", err)
+	}
 	if loaded.Autostart {
 		if err := d.startServiceJob(loaded); err != nil {
 			return loaded, fmt.Errorf("autostart: %w", err)
