@@ -147,12 +147,12 @@ func TestMatcherSingleCharSequence(t *testing.T) {
 
 func TestMatcherDefaultsWhenSeqEmpty(t *testing.T) {
 	m := newMatcher(nil)
-	// Should use DefaultDetachSequence (Ctrl+P, Ctrl+Q).
-	if _, det := m.feed(0x10); det {
-		t.Errorf("Ctrl+P should hold under default seq")
+	// Should use DefaultDetachSequence (Ctrl+X, d).
+	if _, det := m.feed(0x18); det {
+		t.Errorf("Ctrl+X should hold under default seq")
 	}
-	if _, det := m.feed(0x11); !det {
-		t.Errorf("Ctrl+P+Ctrl+Q should detach under default seq")
+	if _, det := m.feed('d'); !det {
+		t.Errorf("Ctrl+X+d should detach under default seq")
 	}
 }
 
@@ -161,7 +161,7 @@ func TestBannerIncludesTargetAndShortcut(t *testing.T) {
 	if !strings.Contains(got, "web") {
 		t.Errorf("banner missing target: %q", got)
 	}
-	if !strings.Contains(got, "Ctrl+P then Ctrl+Q") {
+	if !strings.Contains(got, "Ctrl+X then d") {
 		t.Errorf("banner missing detach shortcut: %q", got)
 	}
 }

@@ -10,12 +10,13 @@ import (
 	"strings"
 )
 
-// DefaultDetachSequence is the default detach hotkey: Ctrl+P then
-// Ctrl+Q (Docker's convention). Two bytes so the prefix Ctrl+P alone
-// (which is "previous-line" in many readline modes) doesn't fire a
-// detach. Doesn't collide with the prefix keys of tmux (Ctrl+B),
-// screen (Ctrl+A), or zellij (Ctrl+G).
-var DefaultDetachSequence = []byte{0x10, 0x11} // Ctrl+P, Ctrl+Q
+// DefaultDetachSequence is the default detach hotkey: Ctrl+X then 'd'.
+// Two bytes so the prefix Ctrl+X alone (an emacs/readline prefix)
+// doesn't fire a detach. Avoids the mode-prefix keys of tmux (Ctrl+B),
+// screen (Ctrl+A), and zellij (Ctrl+G/P/T/N/H/S/O/Q) — Docker's
+// Ctrl+P,Ctrl+Q collides with zellij's pane-mode + quit and tears
+// down the whole session.
+var DefaultDetachSequence = []byte{0x18, 'd'} // Ctrl+X, d
 
 // matcher is a tiny streaming sequence detector. Feed bytes one at a
 // time; when the configured sequence has been observed in order, the

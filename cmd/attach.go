@@ -19,8 +19,8 @@ var attachCmd = &cobra.Command{
 	Short: "Attach your terminal to a running job's PTY",
 	Long: `attach proxies your local terminal into a running job's PTY. You see what
 the job is printing and your keystrokes go to its stdin. Default detach
-shortcut is Ctrl+P then Ctrl+Q (Docker-style). Override via the GODO_DETACH
-environment variable, e.g. GODO_DETACH="Ctrl+B,d".
+shortcut is Ctrl+X then d. Override via the GODO_DETACH environment
+variable, e.g. GODO_DETACH="Ctrl+B,d".
 
 Useful for talking to interactive subprocesses (REPLs, vim, htop) you launched
 via 'godo run'. Window resizes are forwarded.`,
