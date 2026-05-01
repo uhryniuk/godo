@@ -6,7 +6,7 @@ A small CLI for running and managing long-lived background processes — like `p
 
 ## Status
 
-Pre-1.0, **in progress**. The CLI surface below works end-to-end on Linux and macOS. The TUI is not in yet — see [Roadmap](#roadmap).
+Pre-1.0, **almost there**. The CLI surface below works end-to-end on Linux and macOS. Final polish (resource flags, `--name`, etc.) is the only remaining v1 step — see [Roadmap](#roadmap).
 
 ## Build
 
@@ -90,6 +90,7 @@ Targets accept either an exact name or a hash prefix.
 | `godo attach <id\|name>`         | Take over the job's PTY; type into stdin, see stdout. Ctrl+B d detaches. |
 | `godo load <file.toml>`          | Import a service file into `~/.godo/services/` and register it.        |
 | `godo reload`                    | Rescan `~/.godo/services/`; new files autostart, removed files stop.   |
+| `godo monit` / `godo -i`         | Bubble Tea dashboard. j/k to move, r restart, K kill, Enter attach.    |
 | `godo daemon`                    | Run the supervisor in the foreground (debug / dev).                    |
 
 Hidden: `godo supervisor` is the double-fork target invoked by auto-spawn.
@@ -141,9 +142,8 @@ schedule = "0 3 * * *"          # 3am every day
 
 ## Roadmap
 
-These steps are designed but not shipped:
+Final v1 polish:
 
-- **Step 9** — `godo monit` / `godo -i`: Bubble Tea TUI dashboard with sortable rows, hotkeys for restart/kill/log-tail, and in-pane PTY attach.
 - **Step 10** — `--nice` and `--ionice` flags, `--name` flag for `godo run`, `godo shutdown`, `godo version`.
 
 Beyond v1: live job-to-job piping (`godo pipe A B` fanning A's output into B's input, with the TUI showing the wire). The daemon's output multiplexer and input merger are already shaped for this; no v1 refactor is needed.

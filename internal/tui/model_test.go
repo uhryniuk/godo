@@ -1,0 +1,90 @@
+package tui
+
+import (
+	"strings"
+	"testing"
+	"time"
+	"unicode/utf8"
+
+	"github.com/uhryniuk/godo/internal/job"
+)
+
+// Most of the TUI is rendering and Bubble Tea wiring (we don't test
+// either by policy). The pure parts worth pinning are clamp() and the
+// row formatter so visual changes that break layout are caught.
+
+func TestClamp(t *testing.T) {
+	cases := []struct{ v, lo, hi, want int }{
+		{0, 0, 5, 0},
+		{3, 0, 5, 3},
+		{10, 0, 5, 5},
+		{-1, 0, 5, 0},
+		{2, 5, 0, 5}, // hi < lo: returns lo
+		{0, 0, -1, 0},
+	}
+	for _, c := range cases {
+		if got := clamp(c.v, c.lo, c.hi); got != c.want {
+			t.Errorf("clamp(%d,%d,%d): got %d, want %d", c.v, c.lo, c.hi, got, c.want)
+		}
+	}
+}
+
+func TestTruncName(t *testing.T) {
+	if got := truncName("short", 32); got != "short" {
+		t.Errorf("short pass-through: %q", got)
+	}
+	long := strings.Repeat("a", 50)
+	got := truncName(long, 32)
+	if n := utf8.RuneCountInString(got); n != 32 {
+		t.Errorf("truncated rune count: got %d, want 32", n)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("truncated should end with ellipsis: %q", got)
+	}
+}
+
+func TestRenderRowMarksSelectionAndIncludesFields(t *testing.T) {
+	j := job.Job{
+		Hash:      "abcdef1234567890",
+		Name:      "web",
+		State:     job.Running,
+		PID:       42,
+		StartedAt: time.Now().Add(-5 * time.Second),
+	}
+	row := renderRow(j, time.Now(), true)
+	if !strings.HasPrefix(row, "> ") {
+		t.Errorf("selected row should start with '> ': %q", row)
+	}
+	for _, want := range []string{"abcdef12", "web", "running", "42"} {
+		if !strings.Contains(row, want) {
+			t.Errorf("row missing %q: %q", want, row)
+		}
+	}
+}
+
+func TestRenderRowExitDashedForRunning(t *testing.T) {
+	j := job.Job{
+		Hash:  "deadbeef00000000",
+		Name:  "x",
+		State: job.Running,
+	}
+	row := renderRow(j, time.Now(), false)
+	// Exit column for Running should not be a number — should be a
+	// dash. Tabwriter could include "0" so check for the trailing "-".
+	if !strings.HasSuffix(strings.TrimRight(row, " \n"), "-") {
+		t.Errorf("running job exit should be -, got %q", row)
+	}
+}
+
+func TestRenderRowExitNumericForExited(t *testing.T) {
+	j := job.Job{
+		Hash:     "deadbeef00000000",
+		Name:     "x",
+		State:    job.Failed,
+		ExitCode: 7,
+	}
+	row := renderRow(j, time.Now(), false)
+	if !strings.HasSuffix(strings.TrimRight(row, " \n"), "7") {
+		t.Errorf("failed job should show numeric exit, got %q", row)
+	}
+}

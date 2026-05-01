@@ -29,6 +29,11 @@ which spawns and tracks the process.`,
 			_ = cmd.Help()
 			return
 		}
+		// `godo -i` is the shortcut to launch the TUI dashboard.
+		if args[0] == "-i" || args[0] == "--interactive" {
+			runMonit()
+			return
+		}
 
 		config.InitConfig()
 		sock := config.GetSocketPath()
@@ -66,6 +71,7 @@ func Execute() {
 		attachCmd,
 		loadCmd,
 		reloadCmd,
+		monitCmd,
 	)
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
