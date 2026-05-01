@@ -50,15 +50,29 @@ godo rm d2a91e0c             # only when stopped; deletes the log dir
 #   good: godo python3 -m http.server     ← shell tokenizes, godo passes through
 #   good: godo sh -c "python3 -m http.server"   ← when you need shell features
 
-# For flags (--name / --restart / --nice / --env / --working-dir),
-# use the explicit form — `--` separates godo flags from the child's:
+# Name an ad-hoc command — pass --name (or -n) BEFORE the command. Anything
+# after the command name is passed to the child untouched, so a --name in
+# the child's own args is preserved.
+godo --name web sh -c "python3 -m http.server 8888"
+godo rm web
+
+# For richer flags (--restart / --nice / --env / --working-dir), use the
+# explicit form — `--` separates godo flags from the child's:
 godo run --name web --restart on-failure -- node server.js --port 8080
 
 # Then target by name:
 godo stop web
 godo logs -f web
 
-# Shut everything down:
+# JSON output for scripting:
+godo list -o json | jq '.[] | select(.state=="running") | .name'
+
+# Replace the running daemon with a freshly built godo (kills running jobs).
+# Subsequent CLI calls also print a dim notice when the supervisor binary
+# doesn't match the CLI build, prompting an upgrade.
+godo upgrade
+
+# Shut everything down (no respawn until the next godo invocation):
 godo shutdown
 ```
 
@@ -95,10 +109,10 @@ Targets accept either an exact name or a hash prefix.
 
 | Command                          | Behavior                                                               |
 | -------------------------------- | ---------------------------------------------------------------------- |
-| `godo <cmd> [args...]`           | Run `<cmd>` as a supervised job. Auto-spawns the daemon.               |
-| `godo list` / `godo ps`          | Print a table of all jobs with state/pid/uptime/exit.                  |
+| `godo [--name X] <cmd> [args...]` | Run `<cmd>` as a supervised job. `--name`/`-n` (before the command) labels the job for `stop`/`rm`/etc. Auto-spawns the daemon. |
+| `godo list [-o table\|json]` / `godo ps` | Print all jobs as a table (default) or full JSON records.       |
 | `godo stop <id\|name>`           | SIGTERM the job's process group; sets `cancelled`.                     |
-| `godo restart <id\|name>`        | Stop, wait for exit, start again with the same spec and hash.          |
+| `godo restart <id\|name>`        | Stop, wait for actual exit (escalating to SIGKILL after a grace window), then start again with the same spec and hash. |
 | `godo rm <id\|name>`             | Drop a stopped job from the registry and delete its log dir.           |
 | `godo logs <id\|name>`           | Print the job's combined output.                                       |
 | `godo logs -f <id\|name>`        | Stream the log: replays existing content then forwards live writes.    |
@@ -107,6 +121,7 @@ Targets accept either an exact name or a hash prefix.
 | `godo reload`                    | Rescan `~/.godo/services/`; new files autostart, removed files stop.   |
 | `godo monit` / `godo -i`         | Bubble Tea dashboard. j/k to move, r restart, K kill, Enter attach.    |
 | `godo run [flags] -- <cmd>...`   | Explicit form with flags (`--name`, `--restart`, `--nice`, `--env`).   |
+| `godo upgrade`                   | Stop the running supervisor so the next CLI call spawns the new binary. Lists running jobs that will die and prompts (`--yes` / `--force`). |
 | `godo shutdown`                  | Tell the daemon to stop all children, persist state, and exit.         |
 | `godo version`                   | Print the daemon version and build SHA.                                |
 | `godo daemon`                    | Run the supervisor in the foreground (debug / dev).                    |
@@ -143,6 +158,16 @@ overlap  = false                # default: skip a tick if a prior run is still a
 
 Service identity is the file path. A given file always maps to the same registry entry across daemon restarts, so log dirs and short hashes stay stable.
 
+## Upgrading the binary
+
+The supervisor process is the binary that was running when it first auto-spawned — installing a newer `godo` doesn't replace it in place. To pick up new behavior:
+
+```sh
+godo upgrade        # confirms, lists jobs that'll die, shuts the daemon down
+```
+
+The next `godo` call auto-spawns the new binary. While the CLI and daemon disagree, every non-management `godo` command prints a dim one-line stderr notice with the two build hashes and a hint to run `godo upgrade`. Both sides identify themselves by `vcs.revision` (with a `+dirty` suffix when the working tree was modified at build time), so locally hacked binaries don't accidentally compare equal to their parent commit.
+
 ## Cron
 
 Service files can declare a schedule and the daemon's internal scheduler fires the command on each tick. Each fire creates a fresh registry entry named `<service>@<unix-second>` so multiple runs don't collide. By default `overlap = false` suppresses a new tick if the previous instance is still running — bump to `true` for fan-out workloads.
@@ -164,7 +189,8 @@ v1 is feature-complete. Things on deck for **v2**, scoped after a dogfooding win
 
 - **Live job-to-job piping** — `godo pipe A B` fans A's output into B's input. The daemon's output multiplexer and input merger are already shaped for this; v2 just adds the RPC, cycle detection, and a TUI wire-view.
 - **Remote / agent-oriented surfaces** — HTTP frontend over the existing wire protocol so the TUI (or a web view, à la zellij) can connect to a daemon on another machine, plus exploration of agent-driven workflows where godo is both the runtime and the introspection surface.
-- **Ergonomic gaps** — `--quiet` / `--json` outputs for scripting, configurable detach key, real `ionice` plumbing on Linux.
+- **Reusable command aliases** — a lightweight `godo alias <name> -- <cmd>...` that survives `godo rm` and lets you re-launch by name (today the closest equivalent is a service file).
+- **Ergonomic gaps** — `--quiet` and richer `--output` formats elsewhere, real `ionice` plumbing on Linux, live-upgrade that preserves running jobs across `godo upgrade`.
 
 See `TODO.md` (gitignored) for the running ledger.
 
