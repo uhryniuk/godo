@@ -137,13 +137,15 @@ func (d *Daemon) handleConn(conn net.Conn) {
 // isStreamOp reports whether op uses the streaming wire protocol (ack
 // Response followed by N DataFrames) rather than single Request/Response.
 func isStreamOp(op proto.Op) bool {
-	return op == proto.OpLogsFollow
+	return op == proto.OpLogsFollow || op == proto.OpAttach
 }
 
 func (d *Daemon) dispatchStream(req proto.Request, conn net.Conn) {
 	switch req.Op {
 	case proto.OpLogsFollow:
 		d.handleLogsFollow(req, conn)
+	case proto.OpAttach:
+		d.handleAttach(req, conn)
 	default:
 		_ = proto.WriteFrame(conn, proto.Response{
 			OK:    false,

@@ -26,6 +26,7 @@ type runningProc struct {
 	cmd     *exec.Cmd
 	ptmx    *os.File     // PTY master; child's stdio is bound to the slave
 	mux     *Multiplexer // fanout for PTY-master reads
+	merger  *InputMerger // fan-in to PTY master from N input sources
 	logFile *os.File     // per-job output.log; subscribed to mux
 
 	readerDone chan struct{} // closed when the PTY reader goroutine exits
@@ -73,6 +74,30 @@ func (r *Runner) Multiplexer(hash string) *Multiplexer {
 		return rp.mux
 	}
 	return nil
+}
+
+// InputMerger returns the live input merger for hash, or nil if the job
+// is not running. Used by the Attach handler to register an input source.
+func (r *Runner) InputMerger(hash string) *InputMerger {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if rp, ok := r.procs[hash]; ok {
+		return rp.merger
+	}
+	return nil
+}
+
+// Resize updates the window size of hash's PTY. Returns ErrNotFound if
+// the job is not running. Holds the procs lock so the watcher can't
+// close ptmx underneath us.
+func (r *Runner) Resize(hash string, cols, rows uint16) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rp, ok := r.procs[hash]
+	if !ok {
+		return ErrNotFound
+	}
+	return pty.Setsize(rp.ptmx, &pty.Winsize{Cols: cols, Rows: rows})
 }
 
 // Start spawns j's process under a PTY. Returns once exec succeeds (PID
@@ -138,11 +163,13 @@ func (r *Runner) Start(j *job.Job) error {
 
 	mux := NewMultiplexer(64)
 	logSub := mux.Subscribe()
+	merger := NewInputMerger(ptmx)
 
 	rp := &runningProc{
 		cmd:        cmd,
 		ptmx:       ptmx,
 		mux:        mux,
+		merger:     merger,
 		logFile:    logFile,
 		readerDone: make(chan struct{}),
 		writerDone: make(chan struct{}),
@@ -201,23 +228,34 @@ func (r *Runner) watch(hash string, rp *runningProc) {
 	// Prefer letting the PTY reader exit naturally so we don't truncate
 	// any final buffered output. On some kernels the master read can
 	// block past child exit; force-close as a backstop after a brief
-	// grace period.
+	// grace period. We do not call ptmx.Close() yet — handleAttach
+	// might still hold rp via the procs map and call Resize on ptmx.
+	// Close after deleting from procs (under the same lock).
 	select {
 	case <-rp.readerDone:
 	case <-time.After(100 * time.Millisecond):
+		// PTY reader is wedged; force the read to return. Close holds
+		// no rp-related locks so this is safe.
 		_ = rp.ptmx.Close()
 		<-rp.readerDone
 	}
-	_ = rp.ptmx.Close()
 
 	// Tear down fanout: signals the log writer to drain and exit, plus
 	// any logs-follow subscribers see channel close.
 	rp.mux.Close()
 	<-rp.writerDone
 
+	// Tear down input side: any attached client's source goroutine
+	// stops; CloseAll waits for buffered input to flush before returning.
+	rp.merger.CloseAll()
+
+	// Pull rp out of procs FIRST, then close ptmx. Anyone holding the
+	// procs lock has either seen rp (and finished any ptmx operation
+	// before releasing) or no longer sees it.
 	r.mu.Lock()
 	delete(r.procs, hash)
 	r.mu.Unlock()
+	_ = rp.ptmx.Close()
 
 	exitCode := 0
 	if rp.cmd.ProcessState != nil {

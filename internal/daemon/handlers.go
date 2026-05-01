@@ -224,6 +224,93 @@ func (d *Daemon) handleLogsFollow(req proto.Request, conn net.Conn) {
 	_ = proto.WriteFrame(conn, proto.DataFrame{EOF: true})
 }
 
+// handleAttach is the bidirectional PTY-proxy stream. The daemon
+// subscribes the client to the job's output multiplexer and registers a
+// new input source on the job's input merger. Output frames go from mux
+// to client; input frames go from client to merger. Resize frames bypass
+// the merger and call pty.Setsize on the master directly.
+//
+// The connection ends when EITHER side hangs up: the job exits (mux
+// closes its subscriber channel) or the client disconnects (frame read
+// fails). Both paths cleanly tear down the input source and subscription.
+func (d *Daemon) handleAttach(req proto.Request, conn net.Conn) {
+	j, errResp := d.resolveTarget(req)
+	if errResp != nil {
+		_ = proto.WriteFrame(conn, *errResp)
+		return
+	}
+
+	mux := d.runner.Multiplexer(j.Hash)
+	merger := d.runner.InputMerger(j.Hash)
+	if mux == nil || merger == nil {
+		_ = proto.WriteFrame(conn, errf("job %s is not running", j.Name))
+		return
+	}
+
+	if err := proto.WriteFrame(conn, proto.Response{OK: true}); err != nil {
+		return
+	}
+
+	sub := mux.Subscribe()
+	src := merger.AddSource()
+
+	// Client -> daemon: input bytes and resize events. Exits on EOF
+	// frame or any read error (client disconnected).
+	clientDone := make(chan struct{})
+	go func() {
+		defer close(clientDone)
+		for {
+			var df proto.DataFrame
+			if err := proto.ReadFrame(conn, &df); err != nil {
+				return
+			}
+			if df.EOF {
+				return
+			}
+			if df.Resize != nil {
+				_ = d.runner.Resize(j.Hash, df.Resize.Cols, df.Resize.Rows)
+				continue
+			}
+			if len(df.Data) > 0 {
+				if err := src.Send(df.Data); err != nil {
+					return
+				}
+			}
+		}
+	}()
+
+	// Daemon -> client: forward mux output until the job exits or the
+	// client goroutine signals exit.
+	for {
+		select {
+		case <-clientDone:
+			// Client disconnected. Tear down our half.
+			sub.Cancel()
+			src.Close()
+			return
+		case chunk, ok := <-sub.Ch:
+			if !ok {
+				// Job exited. Send EOF, close conn, wait for client
+				// goroutine to notice and exit.
+				_ = proto.WriteFrame(conn, proto.DataFrame{EOF: true})
+				_ = conn.Close()
+				<-clientDone
+				src.Close()
+				return
+			}
+			if err := proto.WriteFrame(conn, proto.DataFrame{Data: chunk}); err != nil {
+				// Write failed (client gone). Close conn so the client
+				// goroutine sees the read fail and exits.
+				_ = conn.Close()
+				<-clientDone
+				sub.Cancel()
+				src.Close()
+				return
+			}
+		}
+	}
+}
+
 // onJobExit applies the restart policy. Called from runner.watch after
 // the terminal state is recorded.
 func (d *Daemon) onJobExit(hash string, exitCode int, state job.State) {

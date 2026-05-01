@@ -18,6 +18,7 @@ const (
 	OpRemove     Op = "Remove"
 	OpLogs       Op = "Logs"       // one-shot, returns full content
 	OpLogsFollow Op = "LogsFollow" // streaming: replays then follows
+	OpAttach     Op = "Attach"     // streaming bidir: PTY proxy
 )
 
 // Request is the envelope for every CLI->daemon RPC.
@@ -87,10 +88,18 @@ type LogsResponse struct {
 	Output string `json:"output"`
 }
 
-// DataFrame is the streaming chunk type used by OpLogsFollow and (later)
-// OpAttach. EOF is set on the final frame so the client can return cleanly
-// without polling for connection close.
+// DataFrame is the streaming chunk type used by OpLogsFollow and OpAttach.
+// EOF is set on the final frame so the client can return cleanly without
+// polling for connection close. Resize is set instead of Data when the
+// frame carries a window-size update (Attach only).
 type DataFrame struct {
-	Data []byte `json:"data,omitempty"` // base64 in JSON
-	EOF  bool   `json:"eof,omitempty"`
+	Data   []byte `json:"data,omitempty"` // base64 in JSON
+	Resize *Size  `json:"resize,omitempty"`
+	EOF    bool   `json:"eof,omitempty"`
+}
+
+// Size is a terminal window size in cells. Cols is across, Rows is down.
+type Size struct {
+	Cols uint16 `json:"cols"`
+	Rows uint16 `json:"rows"`
 }

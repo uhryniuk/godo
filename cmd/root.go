@@ -22,7 +22,10 @@ which spawns and tracks the process.`,
 	DisableFlagParsing: true, // pass everything after 'godo' through to the child
 	Args:               cobra.MinimumNArgs(0),
 	Run: func(cmd *cobra.Command, args []string) {
-		if len(args) == 0 {
+		// DisableFlagParsing means the leading --help / -h doesn't get
+		// special-cased by cobra. Catch it here so `godo --help` shows
+		// help instead of being treated as a child command name.
+		if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 			_ = cmd.Help()
 			return
 		}
@@ -60,6 +63,7 @@ func Execute() {
 		restartCmd,
 		rmCmd,
 		logsCmd,
+		attachCmd,
 	)
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -119,6 +120,92 @@ func (c *Client) Logs(ctx context.Context, target string) (*LogsResponse, error)
 		return nil, err
 	}
 	return &out, nil
+}
+
+// Attach opens a bidirectional PTY-proxy stream to target. Returns an
+// AttachStream that implements io.ReadWriter — Read returns PTY output
+// bytes from the daemon, Write sends PTY input bytes back. Resize sends
+// a window-size update. Close hangs up the connection cleanly.
+func (c *Client) Attach(ctx context.Context, target string) (*AttachStream, error) {
+	body, _ := json.Marshal(TargetRequest{Target: target})
+	conn, err := c.Dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := WriteFrame(conn, Request{Op: OpAttach, Body: body}); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("write attach req: %w", err)
+	}
+	var ack Response
+	if err := ReadFrame(conn, &ack); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("read attach ack: %w", err)
+	}
+	if !ack.OK {
+		_ = conn.Close()
+		return nil, fmt.Errorf("daemon: %s", ack.Error)
+	}
+	return &AttachStream{conn: conn}, nil
+}
+
+// AttachStream is the client side of an OpAttach connection.
+type AttachStream struct {
+	conn    net.Conn
+	readBuf []byte // leftover bytes from a previous DataFrame
+
+	writeMu sync.Mutex // serializes Write and Resize on the wire
+}
+
+// Read implements io.Reader. Returns PTY output bytes from the daemon.
+// On a clean close from the daemon (EOF frame), returns io.EOF.
+func (s *AttachStream) Read(p []byte) (int, error) {
+	if len(s.readBuf) > 0 {
+		n := copy(p, s.readBuf)
+		s.readBuf = s.readBuf[n:]
+		return n, nil
+	}
+	for {
+		var df DataFrame
+		if err := ReadFrame(s.conn, &df); err != nil {
+			return 0, err
+		}
+		if df.EOF {
+			return 0, io.EOF
+		}
+		if len(df.Data) == 0 {
+			continue // resize-only or empty frame; keep reading
+		}
+		n := copy(p, df.Data)
+		if n < len(df.Data) {
+			s.readBuf = df.Data[n:]
+		}
+		return n, nil
+	}
+}
+
+// Write implements io.Writer. Sends PTY input bytes to the daemon.
+func (s *AttachStream) Write(p []byte) (int, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := WriteFrame(s.conn, DataFrame{Data: p}); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// Resize sends a window-size update to the daemon.
+func (s *AttachStream) Resize(cols, rows uint16) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return WriteFrame(s.conn, DataFrame{Resize: &Size{Cols: cols, Rows: rows}})
+}
+
+// Close sends an EOF frame and closes the underlying connection.
+func (s *AttachStream) Close() error {
+	s.writeMu.Lock()
+	_ = WriteFrame(s.conn, DataFrame{EOF: true})
+	s.writeMu.Unlock()
+	return s.conn.Close()
 }
 
 // LogsFollow opens a streaming connection that first replays existing
