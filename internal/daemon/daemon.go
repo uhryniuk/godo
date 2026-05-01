@@ -20,7 +20,7 @@ import (
 )
 
 // Version is bumped when the wire protocol or daemon-visible behaviour changes.
-const Version = "0.0.1"
+const Version = "1.0.0"
 
 // Daemon is the supervisor server. Construct with New and call Run to block.
 type Daemon struct {
