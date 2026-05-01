@@ -6,7 +6,7 @@ A small CLI for running and managing long-lived background processes — like `p
 
 ## Status
 
-Pre-1.0, **in progress**. The CLI surface below works end-to-end on Linux and macOS. Declarative service files, cron, and the TUI are not in yet — see [Roadmap](#roadmap).
+Pre-1.0, **in progress**. The CLI surface below works end-to-end on Linux and macOS. Cron and the TUI are not in yet — see [Roadmap](#roadmap).
 
 ## Build
 
@@ -88,16 +88,46 @@ Targets accept either an exact name or a hash prefix.
 | `godo logs <id\|name>`           | Print the job's combined output.                                       |
 | `godo logs -f <id\|name>`        | Stream the log: replays existing content then forwards live writes.    |
 | `godo attach <id\|name>`         | Take over the job's PTY; type into stdin, see stdout. Ctrl+B d detaches. |
+| `godo load <file.toml>`          | Import a service file into `~/.godo/services/` and register it.        |
+| `godo reload`                    | Rescan `~/.godo/services/`; new files autostart, removed files stop.   |
 | `godo daemon`                    | Run the supervisor in the foreground (debug / dev).                    |
 
 Hidden: `godo supervisor` is the double-fork target invoked by auto-spawn.
+
+## Service files
+
+For long-lived workloads it's nicer to declare them than to remember the `godo run …` command line. Drop a TOML file in `~/.godo/services/` and the daemon picks it up on boot.
+
+```toml
+# ~/.godo/services/web.toml
+name        = "web"             # optional; defaults to filename without .toml
+command     = "node"
+args        = ["server.js"]
+working_dir = "/srv/web"
+autostart   = true              # start on daemon boot / reload
+restart     = "on-failure"      # no | on-failure | always
+nice        = 5                 # POSIX priority
+
+[env]
+PORT = "8080"
+
+[cron]                          # optional; not yet enforced (Step 8)
+schedule = "0 4 * * *"
+```
+
+`godo load /path/to/file.toml` imports a file from anywhere into the services dir (the destination basename is derived from `name`, so source paths from temp dirs / version control are normalized cleanly). `godo reload` rescans the dir and applies the diff:
+
+- New file → registered, autostarted if flagged.
+- Removed file → matching job is stopped (kept in the registry as `cancelled` so logs are still readable; `godo rm` to drop).
+- Modified file → in-memory spec updated, but **not auto-restarted**. Run `godo restart <name>` when you're ready for the new spec to take effect (matches systemd's `daemon-reload` semantics).
+
+Service identity is the file path. A given file always maps to the same registry entry across daemon restarts, so log dirs and short hashes stay stable.
 
 ## Roadmap
 
 These steps are designed but not shipped:
 
-- **Step 7** — TOML service files. Drop `~/.godo/services/web.toml` (systemd-style) and `godo reload` picks it up. Per-service `autostart`, `restart`, `nice`, etc.
-- **Step 8** — Internal cron scheduler. `[cron] schedule = "0 4 * * *"` in a service file fires the command on schedule.
+- **Step 8** — Internal cron scheduler. `[cron] schedule = "0 4 * * *"` is parsed and validated today; Step 8 wires it to actually fire.
 - **Step 9** — `godo monit` / `godo -i`: Bubble Tea TUI dashboard with sortable rows, hotkeys for restart/kill/log-tail, and in-pane PTY attach.
 - **Step 10** — `--nice` and `--ionice` flags, `--name` flag for `godo run`, `godo shutdown`, `godo version`.
 
