@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/uhryniuk/godo/internal/utils"
 )
 
@@ -17,11 +19,17 @@ const (
 	SOCKET_FILE = "godo.sock"
 )
 
-// NOTE CliConfig is a skeleton struct for later work.
-type CliConfig struct{}
+// CliConfig is the parsed contents of ~/.godo/config.toml. Fields are
+// optional; missing keys keep their zero value.
+type CliConfig struct {
+	// Editor is the command to launch when an interactive edit is needed
+	// (e.g. `godo template`). Overridden by $EDITOR at resolution time.
+	Editor string `toml:"editor"`
+}
 
-// InitConfig is an idempotent scaffolding function to ensure that a config
-// exists on the user's system, then use those values to configure the CLI.
+// InitConfig is an idempotent scaffolding function: it ensures every
+// directory under ~/.godo exists, touches the config file, and parses
+// any user values from it.
 func InitConfig() *CliConfig {
 
 	// Ensure all config paths exist
@@ -37,11 +45,25 @@ func InitConfig() *CliConfig {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer file.Close()
+	file.Close()
 
-	// TODO UnMarshall into the config.
+	var cfg CliConfig
+	if _, err := toml.DecodeFile(GetConfigFile(), &cfg); err != nil {
+		log.Fatalf("godo: parse %s: %v", GetConfigFile(), err)
+	}
+	return &cfg
+}
 
-	return &CliConfig{}
+// ResolveEditor returns the editor command to launch for interactive
+// editing. Precedence: $EDITOR env var > config.Editor > "vim".
+func (c *CliConfig) ResolveEditor() string {
+	if e := os.Getenv("EDITOR"); e != "" {
+		return e
+	}
+	if c != nil && c.Editor != "" {
+		return c.Editor
+	}
+	return "vim"
 }
 
 func GetConfigPath() string {
