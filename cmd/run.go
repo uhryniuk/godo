@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -58,8 +59,14 @@ Use '--' to separate godo flags from the child command:
 			envMap[k] = v
 		}
 
+		absCmd, err := exec.LookPath(args[0])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "godo:", err)
+			os.Exit(1)
+		}
+
 		req := proto.RunRequest{
-			Command:    args[0],
+			Command:    absCmd,
 			Args:       args[1:],
 			Name:       runName,
 			WorkingDir: runWorkingDir,
