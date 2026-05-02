@@ -76,6 +76,9 @@ godo run --name web --restart on-failure -- node server.js --port 8080
 godo stop web
 godo logs -f web
 
+# Start a registered service by name (service must exist in ~/.godo/services/):
+godo start my-svc
+
 # Scaffold a new declarative service file (opens it in $EDITOR):
 godo template my-svc
 
@@ -138,6 +141,7 @@ Targets accept either an exact name or a hash prefix.
 | `godo attach <id\|name>`         | Take over the job's PTY. Default detach: Ctrl+X then d ($GODO_DETACH overrides). |
 | `godo load <file.toml>`          | Import a service file into `~/.godo/services/` and register it.        |
 | `godo reload`                    | Rescan `~/.godo/services/`; new files autostart, removed files stop.   |
+| `godo start <name>`              | Start a registered service by name. Errors if already running — use `godo restart` to force. |
 | `godo template <name>`           | Scaffold `~/.godo/services/<name>.toml` and open it in `$EDITOR`. `--force` overwrites; `--no-edit` skips the editor. |
 | `godo services` (aliases: `svc`, `svcs`, `service`) | List all installed service files as a table showing command, autostart, restart policy, cron schedule, and parse status. |
 | `godo monit` / `godo -i`         | Bubble Tea dashboard. j/k move, r restart, p pause/resume, K kill, d remove (confirm with y), Enter attaches a running job or opens the persisted log for a non-running one (j/k/g/G/PgUp/PgDn to scroll, q back). |

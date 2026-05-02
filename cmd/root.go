@@ -183,6 +183,7 @@ func Execute() {
 		attachCmd,
 		loadCmd,
 		reloadCmd,
+		startCmd,
 		templateCmd,
 		servicesCmd,
 		monitCmd,

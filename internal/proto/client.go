@@ -161,6 +161,16 @@ func (c *Client) ListServices(ctx context.Context) (*ListServicesResponse, error
 	return &out, nil
 }
 
+// StartService asks the daemon to start a registered service by name.
+func (c *Client) StartService(ctx context.Context, name string) (*StartServiceResponse, error) {
+	body, _ := json.Marshal(StartServiceRequest{Name: name})
+	var out StartServiceResponse
+	if err := c.callTyped(ctx, Request{Op: OpStartService, Body: body}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Shutdown asks the daemon to stop all running children, save state,
 // and exit cleanly.
 func (c *Client) Shutdown(ctx context.Context) error {

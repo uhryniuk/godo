@@ -24,6 +24,7 @@ const (
 	OpLoadService    Op = "LoadService"
 	OpReloadServices Op = "ReloadServices"
 	OpListServices   Op = "ListServices"
+	OpStartService   Op = "StartService"
 	OpShutdown       Op = "Shutdown"
 )
 
@@ -155,6 +156,16 @@ type ReloadServicesResponse struct {
 
 type ListServicesResponse struct {
 	Services []ServiceInfo `json:"services"`
+}
+
+// StartServiceRequest asks the daemon to start a registered service by name.
+type StartServiceRequest struct {
+	Name string `json:"name"`
+}
+
+// StartServiceResponse carries the job spawned for the service.
+type StartServiceResponse struct {
+	Job job.Job `json:"job"`
 }
 
 // ShutdownResponse is empty; the body exists for symmetry.

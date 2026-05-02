@@ -48,6 +48,8 @@ func (d *Daemon) dispatch(req proto.Request) proto.Response {
 		return d.handleReloadServices()
 	case proto.OpListServices:
 		return d.handleListServices()
+	case proto.OpStartService:
+		return d.handleStartService(req)
 	case proto.OpShutdown:
 		return d.handleShutdown()
 	default:
@@ -116,6 +118,34 @@ func (d *Daemon) handleListServices() proto.Response {
 		infos = append(infos, toServiceInfo(s))
 	}
 	return ok(proto.ListServicesResponse{Services: infos})
+}
+
+func (d *Daemon) handleStartService(req proto.Request) proto.Response {
+	var body proto.StartServiceRequest
+	if err := json.Unmarshal(req.Body, &body); err != nil {
+		return errf("decode: %v", err)
+	}
+	spec := d.svc.findByName(body.Name)
+	if spec == nil {
+		return errf("no service named %q; see 'godo services'", body.Name)
+	}
+	// Guard: already running or paused.
+	if hash, ok := d.findServiceJobHash(spec.Path); ok {
+		if j, err := d.registry.GetCopy(hash); err == nil {
+			if j.State == job.Running || j.State == job.Paused {
+				return errf("service %q is already running (job %s); use 'godo restart' to restart it", body.Name, j.ShortID())
+			}
+		}
+	}
+	if err := d.startServiceJob(spec); err != nil {
+		return errf("start: %v", err)
+	}
+	hash, found := d.findServiceJobHash(spec.Path)
+	if !found {
+		return errf("internal: job not found after start")
+	}
+	j, _ := d.registry.GetCopy(hash)
+	return ok(proto.StartServiceResponse{Job: j})
 }
 
 func (d *Daemon) resolveTarget(req proto.Request) (*job.Job, *proto.Response) {

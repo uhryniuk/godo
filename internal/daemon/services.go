@@ -45,6 +45,17 @@ func (s *services) remove(path string) {
 	delete(s.specs, path)
 }
 
+func (s *services) findByName(name string) *service.Spec {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, spec := range s.specs {
+		if spec.Name == name {
+			return spec
+		}
+	}
+	return nil
+}
+
 // loadServicesOnBoot scans the services dir, loads everything it can,
 // and returns the slice. Per-file errors are warned but don't stop boot.
 func (d *Daemon) loadServicesOnBoot() []*service.Spec {
