@@ -15,7 +15,14 @@ import (
 // dir is pre-populated with `files` (basename -> body).
 func startDaemonWithServiceDir(t *testing.T, files map[string]string) (sock string, serviceDir string, stop func()) {
 	t.Helper()
-	root := t.TempDir()
+	// Use os.MkdirTemp so the socket path does not embed the test name:
+	// on macOS sockaddr_un.sun_path is limited to 103 chars, and long test
+	// names push t.TempDir() paths over the limit.
+	root, err := os.MkdirTemp("", "gd")
+	if err != nil {
+		t.Fatalf("mktemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	state := filepath.Join(root, "state")
 	services := filepath.Join(root, "services")
 	if err := os.MkdirAll(state, 0o755); err != nil {

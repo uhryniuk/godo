@@ -24,6 +24,20 @@ func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
 
+// shortSockDir returns a temp dir whose path is short enough for a Unix
+// socket on macOS (sockaddr_un.sun_path limit = 103 chars). t.TempDir()
+// embeds the full test name in the path, which pushes many names past the
+// limit; os.MkdirTemp avoids this.
+func shortSockDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "gd")
+	if err != nil {
+		t.Fatalf("shortSockDir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 // startInProcessDaemon launches a Daemon goroutine on sock, waits for the
 // listener to be ready, and returns a stop function.
 func startInProcessDaemon(t *testing.T, sock string) (stop func()) {
@@ -59,7 +73,7 @@ func waitForSocket(t *testing.T, path string, timeout time.Duration) {
 }
 
 func TestEnsureRunning_AlreadyUp_DoesNotSpawn(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "godo.sock")
+	sock := filepath.Join(shortSockDir(t), "godo.sock")
 	stop := startInProcessDaemon(t, sock)
 	defer stop()
 
@@ -83,7 +97,7 @@ func TestEnsureRunning_AlreadyUp_DoesNotSpawn(t *testing.T) {
 }
 
 func TestEnsureRunning_DownThenUp_SpawnsOnce(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "godo.sock")
+	sock := filepath.Join(shortSockDir(t), "godo.sock")
 
 	var stop func()
 	defer func() {
@@ -111,7 +125,7 @@ func TestEnsureRunning_DownThenUp_SpawnsOnce(t *testing.T) {
 }
 
 func TestEnsureRunning_ConcurrentSpawnsExactlyOne(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "godo.sock")
+	sock := filepath.Join(shortSockDir(t), "godo.sock")
 
 	var spawnCount int32
 	var startOnce sync.Once
@@ -151,7 +165,7 @@ func TestEnsureRunning_ConcurrentSpawnsExactlyOne(t *testing.T) {
 }
 
 func TestEnsureRunning_TimesOutWhenSpawnIsSilent(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "godo.sock")
+	sock := filepath.Join(shortSockDir(t), "godo.sock")
 	autospawn.PollTimeout = 200 * time.Millisecond
 	defer func() { autospawn.PollTimeout = 2 * time.Second }()
 
@@ -163,7 +177,7 @@ func TestEnsureRunning_TimesOutWhenSpawnIsSilent(t *testing.T) {
 }
 
 func TestEnsureRunning_HonorsCanceledContext(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "godo.sock")
+	sock := filepath.Join(shortSockDir(t), "godo.sock")
 	autospawn.PollTimeout = 5 * time.Second // would normally wait 5s
 	defer func() { autospawn.PollTimeout = 2 * time.Second }()
 

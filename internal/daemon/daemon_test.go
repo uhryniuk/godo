@@ -20,7 +20,15 @@ func TestMain(m *testing.M) {
 // stop blocks until Run returns.
 func startDaemon(t *testing.T) (sock string, stop func()) {
 	t.Helper()
-	sock = filepath.Join(t.TempDir(), "godo.sock")
+	// Use os.MkdirTemp instead of t.TempDir so the socket path does not
+	// embed the test name: on macOS sockaddr_un.sun_path is limited to
+	// 103 chars, and long test names push t.TempDir() paths over the limit.
+	dir, err := os.MkdirTemp("", "gd")
+	if err != nil {
+		t.Fatalf("mktemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock = filepath.Join(dir, "godo.sock")
 	d := New(sock)
 
 	ctx, cancel := context.WithCancel(context.Background())

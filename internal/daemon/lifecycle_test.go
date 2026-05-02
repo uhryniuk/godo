@@ -406,22 +406,6 @@ func TestStopWorksOnPaused(t *testing.T) {
 	waitForJobState(t, c, resp.Job.Hash, job.Cancelled, 3*time.Second)
 }
 
-// procIsStopped reads /proc/<pid>/status and returns true if the state
-// line indicates the process is SIGSTOP'd (T = traced/stopped).
-func procIsStopped(t *testing.T, pid int) bool {
-	t.Helper()
-	body, err := os.ReadFile("/proc/" + itoa(pid) + "/status")
-	if err != nil {
-		t.Fatalf("read /proc/%d/status: %v", pid, err)
-	}
-	for _, line := range strings.Split(string(body), "\n") {
-		if strings.HasPrefix(line, "State:") {
-			return strings.Contains(line, "T (stopped)") || strings.Contains(line, "t (tracing")
-		}
-	}
-	return false
-}
-
 func itoa(n int) string { return fmt.Sprintf("%d", n) }
 
 func TestLogsReturnsCombinedOutput(t *testing.T) {
@@ -482,7 +466,12 @@ func TestStopBeatsCleanExit(t *testing.T) {
 var _ = filepath.Join
 
 func TestShutdownRPCStopsDaemon(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "godo.sock")
+	dir, err := os.MkdirTemp("", "gd")
+	if err != nil {
+		t.Fatalf("mktemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "godo.sock")
 	d := New(sock)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -506,7 +495,12 @@ func TestShutdownRPCStopsDaemon(t *testing.T) {
 }
 
 func TestShutdownStopsRunningChildren(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "godo.sock")
+	dir2, err := os.MkdirTemp("", "gd")
+	if err != nil {
+		t.Fatalf("mktemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir2) })
+	sock := filepath.Join(dir2, "godo.sock")
 	d := New(sock)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
