@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -165,6 +166,53 @@ func TestDeleteRefusesRunning(t *testing.T) {
 	}
 	if !strings.Contains(mm.statusMsg, "stop") {
 		t.Errorf("expected hint mentioning 'stop', got %q", mm.statusMsg)
+	}
+}
+
+// TestAttachFailedFallsBackToLogViewer checks that when attach fails
+// (e.g. a fast-exiting job was no longer running), the TUI switches
+// to log-viewer mode rather than just showing an error status.
+func TestAttachFailedFallsBackToLogViewer(t *testing.T) {
+	m := Model{
+		jobs: []job.Job{{
+			Hash:  "abcdef1234567890",
+			Name:  "ls",
+			State: job.Completed,
+		}},
+		selected: 0,
+		mode:     modeDashboard,
+		width:    120,
+		height:   40,
+	}
+
+	// Simulate an attachExitedMsg with a non-nil error (attach failed).
+	updated, cmd := m.Update(attachExitedMsg{
+		target: "abcdef1234567890",
+		err:    fmt.Errorf("job ls is not running"),
+	})
+	mm := updated.(Model)
+
+	// Should NOT change mode yet (logs are fetched async), but a cmd
+	// should be returned (the fetchLogs tea.Cmd).
+	if cmd == nil {
+		t.Fatal("expected a tea.Cmd (fetchLogs) to be returned after attach failure")
+	}
+	// Mode should still be dashboard until logsLoadedMsg arrives.
+	if mm.mode != modeDashboard {
+		t.Errorf("mode should stay dashboard until logs load, got %v", mm.mode)
+	}
+
+	// Simulate the logs loading with some content.
+	updated, _ = mm.Update(logsLoadedMsg{
+		title: "abcdef12  ls  [completed]",
+		body:  "file1.txt\nfile2.txt\n",
+	})
+	mm = updated.(Model)
+	if mm.mode != modeLogs {
+		t.Errorf("mode should be modeLogs after logsLoadedMsg, got %v", mm.mode)
+	}
+	if len(mm.logLines) == 0 || mm.logLines[0] == "(no output)" {
+		t.Errorf("expected log lines to contain output, got %v", mm.logLines)
 	}
 }
 

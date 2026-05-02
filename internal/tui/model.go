@@ -123,7 +123,10 @@ func (m Model) fetchLogs(target, title string) tea.Cmd {
 
 // attachExitedMsg comes back from tea.ExecProcess after the user
 // detaches from the PTY proxy.
-type attachExitedMsg struct{ err error }
+type attachExitedMsg struct {
+	target string
+	err    error
+}
 
 // attachExec implements tea.ExecCommand to run ptyproxy.Run in
 // suspended-Bubble-Tea mode.
@@ -210,10 +213,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case attachExitedMsg:
 		if msg.err != nil {
-			m.statusMsg = "attach: " + msg.err.Error()
-		} else {
-			m.statusMsg = "detached"
+			// Attach failed (e.g. fast-exiting job that was no longer
+			// running). Fall through to the log viewer so the output
+			// isn't lost.
+			title := msg.target
+			for _, j := range m.jobs {
+				if j.Hash == msg.target {
+					title = fmt.Sprintf("%s  %s  [%s]", j.ShortID(), j.Name, j.State)
+					break
+				}
+			}
+			return m, m.fetchLogs(msg.target, title)
 		}
+		m.statusMsg = "detached"
 		return m, clearStatusAfter(2 * time.Second)
 
 	case logsLoadedMsg:
@@ -305,9 +317,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if j, ok := m.currentJob(); ok {
 			if j.State == job.Running {
+				hash := j.Hash
 				return m, tea.Exec(
-					&attachExec{client: m.client, target: j.Hash},
-					func(err error) tea.Msg { return attachExitedMsg{err: err} },
+					&attachExec{client: m.client, target: hash},
+					func(err error) tea.Msg { return attachExitedMsg{target: hash, err: err} },
 				)
 			}
 			// Non-running: show the persisted log in an in-TUI viewer.
