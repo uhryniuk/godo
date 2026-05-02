@@ -25,7 +25,6 @@ var servicesCmd = &cobra.Command{
 		rows := gatherServiceRows(config.GetServiceDir())
 		renderServicesTable(os.Stdout, rows)
 	},
-
 }
 
 type serviceRow struct {
