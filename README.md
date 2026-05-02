@@ -76,6 +76,9 @@ godo run --name web --restart on-failure -- node server.js --port 8080
 godo stop web
 godo logs -f web
 
+# Scaffold a new declarative service file (opens it in $EDITOR):
+godo template my-svc
+
 # JSON output for scripting:
 godo list -o json | jq '.[] | select(.state=="running") | .name'
 
@@ -132,6 +135,7 @@ Targets accept either an exact name or a hash prefix.
 | `godo attach <id\|name>`         | Take over the job's PTY. Default detach: Ctrl+X then d ($GODO_DETACH overrides). |
 | `godo load <file.toml>`          | Import a service file into `~/.godo/services/` and register it.        |
 | `godo reload`                    | Rescan `~/.godo/services/`; new files autostart, removed files stop.   |
+| `godo template <name>`           | Scaffold `~/.godo/services/<name>.toml` and open it in `$EDITOR`. `--force` overwrites; `--no-edit` skips the editor. |
 | `godo monit` / `godo -i`         | Bubble Tea dashboard. j/k move, r restart, p pause/resume, K kill, d remove (confirm with y), Enter attaches a running job or opens the persisted log for a non-running one (j/k/g/G/PgUp/PgDn to scroll, q back). |
 | `godo run [flags] -- <cmd>...`   | Explicit form with flags (`--name`, `--restart`, `--nice`, `--env`).   |
 | `godo upgrade`                   | Stop the running supervisor so the next CLI call spawns the new binary. Lists running jobs that will die and prompts (`--yes` / `--force`). |
@@ -144,6 +148,8 @@ Hidden: `godo supervisor` is the double-fork target invoked by auto-spawn.
 ## Service files
 
 For long-lived workloads it's nicer to declare them than to remember the `godo run …` command line. Drop a TOML file in `~/.godo/services/` and the daemon picks it up on boot.
+
+The fastest way to author one is `godo template <name>`, which writes a fully-commented starter and opens it in `$EDITOR`. The editor is resolved as `$EDITOR` → `editor = "..."` in `~/.godo/config.toml` → `vim`.
 
 ```toml
 # ~/.godo/services/web.toml
