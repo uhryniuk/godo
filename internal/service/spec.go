@@ -98,6 +98,31 @@ func LoadAll(dir string) ([]*Spec, error) {
 	return specs, nil
 }
 
+// LoadAllWithErrors globs dir/*.toml and attempts to load every match.
+// Unlike LoadAll, per-file failures are returned as a map keyed by
+// absolute file path rather than a single combined error, so callers
+// can present granular error rows without string-parsing.
+func LoadAllWithErrors(dir string) ([]*Spec, map[string]error, error) {
+	matches, err := filepath.Glob(filepath.Join(dir, "*.toml"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("glob: %w", err)
+	}
+	sort.Strings(matches)
+
+	var specs []*Spec
+	perFileErrs := make(map[string]error)
+	for _, p := range matches {
+		abs, _ := filepath.Abs(p)
+		s, err := Load(p)
+		if err != nil {
+			perFileErrs[abs] = err
+			continue
+		}
+		specs = append(specs, s)
+	}
+	return specs, perFileErrs, nil
+}
+
 // Validate enforces the schema rules: command must be non-empty,
 // restart (if set) must be a known policy, cron schedule (if set)
 // must parse.

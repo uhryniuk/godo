@@ -184,6 +184,7 @@ func Execute() {
 		loadCmd,
 		reloadCmd,
 		templateCmd,
+		servicesCmd,
 		monitCmd,
 		runCmd,
 		shutdownCmd,

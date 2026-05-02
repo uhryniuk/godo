@@ -79,6 +79,9 @@ godo logs -f web
 # Scaffold a new declarative service file (opens it in $EDITOR):
 godo template my-svc
 
+# List all installed service files:
+godo services          # or: godo svc / godo svcs / godo service
+
 # JSON output for scripting:
 godo list -o json | jq '.[] | select(.state=="running") | .name'
 
@@ -136,6 +139,7 @@ Targets accept either an exact name or a hash prefix.
 | `godo load <file.toml>`          | Import a service file into `~/.godo/services/` and register it.        |
 | `godo reload`                    | Rescan `~/.godo/services/`; new files autostart, removed files stop.   |
 | `godo template <name>`           | Scaffold `~/.godo/services/<name>.toml` and open it in `$EDITOR`. `--force` overwrites; `--no-edit` skips the editor. |
+| `godo services` (aliases: `svc`, `svcs`, `service`) | List all installed service files as a table showing command, autostart, restart policy, cron schedule, and parse status. |
 | `godo monit` / `godo -i`         | Bubble Tea dashboard. j/k move, r restart, p pause/resume, K kill, d remove (confirm with y), Enter attaches a running job or opens the persisted log for a non-running one (j/k/g/G/PgUp/PgDn to scroll, q back). |
 | `godo run [flags] -- <cmd>...`   | Explicit form with flags (`--name`, `--restart`, `--nice`, `--env`).   |
 | `godo upgrade`                   | Stop the running supervisor so the next CLI call spawns the new binary. Lists running jobs that will die and prompts (`--yes` / `--force`). |

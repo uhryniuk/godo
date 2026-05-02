@@ -228,6 +228,26 @@ func TestSpecHashChangesWithContent(t *testing.T) {
 	}
 }
 
+func TestLoadAllWithErrors_SeparatesGoodAndBad(t *testing.T) {
+	dir := t.TempDir()
+	writeSpecFile(t, dir, "ok.toml", "name=\"ok\"\ncommand=\"/bin/true\"\n")
+	badPath := writeSpecFile(t, dir, "bad.toml", "name=\"bad\"\n") // missing command
+
+	specs, perFileErrs, err := LoadAllWithErrors(dir)
+	if err != nil {
+		t.Fatalf("unexpected top-level error: %v", err)
+	}
+	if len(specs) != 1 || specs[0].Name != "ok" {
+		t.Errorf("expected 1 good spec, got %d", len(specs))
+	}
+	if len(perFileErrs) != 1 {
+		t.Errorf("expected 1 per-file error, got %d", len(perFileErrs))
+	}
+	if _, ok := perFileErrs[badPath]; !ok {
+		t.Errorf("perFileErrs should be keyed by bad file path %q; got %v", badPath, perFileErrs)
+	}
+}
+
 func TestJobOptionsCarriesAllFields(t *testing.T) {
 	dir := t.TempDir()
 	path := writeSpecFile(t, dir, "full.toml", `
